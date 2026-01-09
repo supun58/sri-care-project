@@ -1,35 +1,58 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import { useState } from 'react';
+import { Login } from './components/Login';
+import { Register } from './components/Register';
+import { Dashboard } from './components/Dashboard';
+import { ForgotPassword } from './components/ForgotPassword';
 
-function App() {
-  const [count, setCount] = useState(0)
+export type User = {
+  id: string;
+  name: string;
+  mobile: string;
+  email: string;
+  accountNumber: string;
+};
+
+export default function App() {
+  const [currentView, setCurrentView] = useState<'login' | 'register' | 'dashboard' | 'forgot-password'>('login');
+  const [user, setUser] = useState<User | null>(null);
+
+  const handleLogin = (userData: User) => {
+    setUser(userData);
+    setCurrentView('dashboard');
+  };
+
+  const handleLogout = () => {
+    setUser(null);
+    setCurrentView('login');
+  };
+
+  const handleRegisterSuccess = () => {
+    setCurrentView('login');
+  };
 
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.tsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
-  )
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-blue-100">
+      {currentView === 'login' && (
+        <Login 
+          onLogin={handleLogin}
+          onRegister={() => setCurrentView('register')}
+          onForgotPassword={() => setCurrentView('forgot-password')}
+        />
+      )}
+      {currentView === 'register' && (
+        <Register 
+          onRegisterSuccess={handleRegisterSuccess}
+          onBackToLogin={() => setCurrentView('login')}
+        />
+      )}
+      {currentView === 'forgot-password' && (
+        <ForgotPassword 
+          onBackToLogin={() => setCurrentView('login')}
+        />
+      )}
+      {currentView === 'dashboard' && user && (
+        <Dashboard user={user} onLogout={handleLogout} />
+      )}
+    </div>
+  );
 }
-
-export default App

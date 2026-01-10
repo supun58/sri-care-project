@@ -1,6 +1,8 @@
 import { useState } from 'react';
-import { Smartphone, Lock, User as UserIcon } from 'lucide-react';
+import axios from 'axios';
+import { Smartphone, Lock } from 'lucide-react';
 import type { User } from '../App';
+import { api } from '../api/api';
 
 type LoginProps = {
   onLogin: (user: User) => void;
@@ -12,23 +14,58 @@ export function Login({ onLogin, onRegister, onForgotPassword }: LoginProps) {
   const [mobile, setMobile] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
-    // Mock authentication
-    if (mobile && password) {
-      // Simulate successful login with mock data
-      onLogin({
-        id: '1',
-        name: 'Nimal Perera',
-        mobile: mobile,
-        email: 'nimal.perera@email.com',
-        accountNumber: 'STL' + mobile.slice(-6)
-      });
-    } else {
+    if (!mobile || !password) {
       setError('Please enter both mobile number and password');
+      return;
+    }
+
+    const mobileRegex = /^07\d{8}$/;
+    if (!mobileRegex.test(mobile)) {
+      setError('Invalid mobile number format. Use 07XXXXXXXX');
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      const response = await api.login(mobile, password);
+      const { success, user, token, message } = response.data ?? {};
+
+      if (!success || !user || !token) {
+        setError(message ?? 'Login failed. Please try again.');
+        return;
+      }
+
+      localStorage.setItem('token', token);
+
+      const phone = user.phone ?? mobile;
+      onLogin({
+        id: String(user.id ?? phone),
+        name: user.name ?? 'Customer',
+        phone: phone,
+        mobile: phone,
+        email: user.email ?? `${phone}@stl.lk`,
+        accountNumber: user.accountNumber ?? 'STL' + phone.slice(-6),
+        accountType: user.accountType ?? 'prepaid',
+        accountBalance: user.accountBalance ?? 0,
+        currentBill: user.currentBill ?? 0,
+        dataRemaining: user.dataRemaining ?? 0,
+        minutesRemaining: user.minutesRemaining ?? 0
+      });
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const serverMessage = err.response?.data?.message;
+        setError(serverMessage ?? 'Unable to login. Please try again.');
+      } else {
+        setError('Something went wrong. Please try again.');
+      }
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -107,9 +144,10 @@ export function Login({ onLogin, onRegister, onForgotPassword }: LoginProps) {
 
             <button
               type="submit"
-              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-colors shadow-lg hover:shadow-xl"
+              disabled={isLoading}
+              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg transition-colors shadow-lg hover:shadow-xl"
             >
-              Login
+              {isLoading ? 'Logging in...' : 'Login'}
             </button>
           </form>
 

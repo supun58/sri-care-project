@@ -14,12 +14,19 @@ app.get('/', (req, res) => {
 });
 
 // Mock routes
-app.use('/api/auth', require('./mock-services/mock-auth'));
+app.use('/api/auth', require('./mock-services/authService'));
 app.use('/api/billing', require('./mock-services/mock-billing'));
 app.use('/api/services', require('./mock-services/mock-services'));
 app.use('/api/payment', require('./mock-services/mock-payment'));
 
-const PORT = process.env.PORT || 5000;
+// Test endpoint
+app.get('/api/test', (req, res) => {
+  res.json({ message: 'API is working!', timestamp: new Date() });
+});
+
+const PORT = process.env.PORT || 5001;
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+

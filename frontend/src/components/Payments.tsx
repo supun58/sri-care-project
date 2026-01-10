@@ -1,5 +1,7 @@
-import { useState } from 'react';
-import { CreditCard, Calendar, Lock, CheckCircle, AlertCircle, History } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { CreditCard, Calendar, Lock, CheckCircle, AlertCircle, History, Wallet } from 'lucide-react';
+import type { User } from '../App';
+import { api } from '../api/api';
 
 type PaymentHistory = {
   id: string;
@@ -10,8 +12,20 @@ type PaymentHistory = {
   reference: string;
 };
 
-export function Payments() {
-  const [paymentAmount, setPaymentAmount] = useState('1250.00');
+type PaymentsProps = {
+  user: User;
+  initialAmount?: number;
+  onPaymentSuccess?: () => Promise<void>;
+};
+
+export function Payments({ user, initialAmount = 0, onPaymentSuccess }: PaymentsProps) {
+  const isPrepaid = user.accountType === 'prepaid';
+  const [paymentAmount, setPaymentAmount] = useState(initialAmount > 0 ? initialAmount.toFixed(2) : '0.00');
+  
+  useEffect(() => {
+    setPaymentAmount(initialAmount > 0 ? initialAmount.toFixed(2) : '0.00');
+  }, [initialAmount]);
+  
   const [cardNumber, setCardNumber] = useState('');
   const [cardName, setCardName] = useState('');
   const [expiryDate, setExpiryDate] = useState('');
@@ -19,47 +33,100 @@ export function Payments() {
   const [showSuccess, setShowSuccess] = useState(false);
   const [processing, setProcessing] = useState(false);
 
-  const [paymentHistory] = useState<PaymentHistory[]>([
-    {
-      id: '1',
-      date: '2025-12-10',
-      amount: 1100.00,
-      method: 'Visa ****4532',
-      status: 'success',
-      reference: 'PAY-2025-001234'
-    },
-    {
-      id: '2',
-      date: '2025-11-08',
-      amount: 980.00,
-      method: 'Mastercard ****7890',
-      status: 'success',
-      reference: 'PAY-2025-001198'
-    },
-    {
-      id: '3',
-      date: '2025-10-12',
-      amount: 1350.00,
-      method: 'Visa ****4532',
-      status: 'success',
-      reference: 'PAY-2025-001156'
-    },
-    {
-      id: '4',
-      date: '2025-09-09',
-      amount: 1200.00,
-      method: 'Visa ****4532',
-      status: 'success',
-      reference: 'PAY-2025-001099'
-    }
-  ]);
+  // Payment history - different for prepaid and postpaid
+  const [paymentHistory, setPaymentHistory] = useState<PaymentHistory[]>([]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  useEffect(() => {
+    if (isPrepaid) {
+      // Load top-up history for prepaid
+      const stored = localStorage.getItem(`topups_${user.id}`);
+      if (stored) {
+        const topups = JSON.parse(stored);
+        setPaymentHistory(topups.map((t: any) => ({
+          id: t.id,
+          date: t.date,
+          amount: t.amount,
+          method: t.method,
+          status: 'success' as const,
+          reference: t.reference
+        })));
+      }
+    } else {
+      // Mock postpaid payment history
+      setPaymentHistory([
+        {
+          id: '1',
+          date: '2025-12-10',
+          amount: 1100.00,
+          method: 'Visa ****4532',
+          status: 'success',
+          reference: 'PAY-2025-001234'
+        },
+        {
+          id: '2',
+          date: '2025-11-08',
+          amount: 980.00,
+          method: 'Mastercard ****7890',
+          status: 'success',
+          reference: 'PAY-2025-001198'
+        },
+        {
+          id: '3',
+          date: '2025-10-12',
+          amount: 1350.00,
+          method: 'Visa ****4532',
+          status: 'success',
+          reference: 'PAY-2025-001156'
+        }
+      ]);
+    }
+  }, [isPrepaid, user.id]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const amount = parseFloat(paymentAmount);
+    
+    if (amount <= 0) {
+      alert('Please enter a valid amount');
+      return;
+    }
+    
     setProcessing(true);
 
-    // Mock payment processing
-    setTimeout(() => {
+    try {
+      // Update backend balance/bill
+      if (isPrepaid) {
+        // Add to account balance
+        const newBalance = user.accountBalance + amount;
+        await api.updateUserAccount(user.id, { accountBalance: newBalance });
+        
+        // Save to localStorage
+        const topup = {
+          id: `TOP${Date.now()}`,
+          date: new Date().toISOString(),
+          amount: amount,
+          method: `Card ****${cardNumber.slice(-4)}`,
+          reference: `TOP-${Date.now()}`
+        };
+        
+        const stored = localStorage.getItem(`topups_${user.id}`);
+        const history = stored ? JSON.parse(stored) : [];
+        history.unshift(topup);
+        localStorage.setItem(`topups_${user.id}`, JSON.stringify(history));
+        setPaymentHistory(history.map((t: any) => ({
+          ...t,
+          status: 'success' as const
+        })));
+      } else {
+        // Reset current bill for postpaid
+        await api.updateUserAccount(user.id, { accountBalance: 0 });
+      }
+      
+      // Refresh user data in parent
+      if (onPaymentSuccess) {
+        await onPaymentSuccess();
+      }
+      
       setProcessing(false);
       setShowSuccess(true);
       
@@ -68,12 +135,17 @@ export function Payments() {
       setCardName('');
       setExpiryDate('');
       setCvv('');
+      setPaymentAmount('0.00');
       
       // Hide success message after 5 seconds
       setTimeout(() => {
         setShowSuccess(false);
       }, 5000);
-    }, 2000);
+    } catch (error) {
+      console.error('Payment error:', error);
+      setProcessing(false);
+      alert('Payment failed. Please try again.');
+    }
   };
 
   const formatCardNumber = (value: string) => {
@@ -104,22 +176,28 @@ export function Payments() {
   return (
     <div>
       <div className="mb-6">
-        <h1 className="text-3xl font-bold text-blue-900 mb-2">Payments</h1>
-        <p className="text-blue-600">Make a payment or view payment history</p>
+        <h1 className="text-3xl font-bold text-blue-900 mb-2">{isPrepaid ? 'Top Up Account' : 'Payments'}</h1>
+        <p className="text-blue-600">{isPrepaid ? 'Add balance to your prepaid account' : 'Make a payment or view payment history'}</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Payment Form */}
         <div className="bg-white rounded-xl shadow-lg border border-blue-100 p-6">
-          <h2 className="text-xl font-semibold text-blue-900 mb-6">Make a Payment</h2>
+          <div className="flex items-center gap-2 mb-6">
+            {isPrepaid && <Wallet className="w-6 h-6 text-blue-600" />}
+            <h2 className="text-xl font-semibold text-blue-900">{isPrepaid ? 'Top Up Balance' : 'Make a Payment'}</h2>
+          </div>
 
           {showSuccess && (
             <div className="mb-6 p-4 bg-green-50 border border-green-200 rounded-lg flex items-start">
               <CheckCircle className="w-5 h-5 text-green-600 mr-3 flex-shrink-0 mt-0.5" />
               <div>
-                <p className="font-semibold text-green-800 mb-1">Payment Successful!</p>
+                <p className="font-semibold text-green-800 mb-1">{isPrepaid ? 'Top Up Successful!' : 'Payment Successful!'}</p>
                 <p className="text-sm text-green-700">
-                  Your payment of LKR {paymentAmount} has been processed successfully.
+                  {isPrepaid 
+                    ? `Your account has been topped up with LKR ${parseFloat(paymentAmount || '0').toFixed(2)}`
+                    : `Your payment of LKR ${parseFloat(paymentAmount || '0').toFixed(2)} has been processed successfully.`
+                  }
                 </p>
               </div>
             </div>
@@ -128,7 +206,7 @@ export function Payments() {
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
               <label className="block text-sm font-medium text-blue-900 mb-2">
-                Payment Amount
+                {isPrepaid ? 'Top Up Amount' : 'Payment Amount'}
               </label>
               <div className="relative">
                 <span className="absolute inset-y-0 left-0 pl-3 flex items-center text-blue-600 font-semibold">
@@ -229,17 +307,17 @@ export function Payments() {
             <button
               type="submit"
               disabled={processing}
-              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-semibold py-4 rounded-lg transition-colors shadow-lg hover:shadow-xl flex items-center justify-center gap-2"
+              className="w-full bg-gradient-to-r from-blue-600 to-blue-700 text-white py-3 rounded-lg font-semibold hover:from-blue-700 hover:to-blue-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
             >
               {processing ? (
                 <>
-                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin mr-2"></div>
                   Processing...
                 </>
               ) : (
                 <>
-                  <Lock className="w-5 h-5" />
-                  Pay LKR {paymentAmount}
+                  {isPrepaid ? <Wallet className="w-5 h-5 mr-2" /> : <Lock className="w-5 h-5 mr-2" />}
+                  {isPrepaid ? 'Top Up Now' : 'Pay Securely'}
                 </>
               )}
             </button>
@@ -253,8 +331,8 @@ export function Payments() {
         {/* Payment History */}
         <div className="bg-white rounded-xl shadow-lg border border-blue-100 p-6">
           <div className="flex items-center gap-2 mb-6">
-            <History className="w-6 h-6 text-blue-600" />
-            <h2 className="text-xl font-semibold text-blue-900">Payment History</h2>
+            {isPrepaid ? <Wallet className="w-6 h-6 text-blue-600 mr-2" /> : <History className="w-6 h-6 text-blue-600 mr-2" />}
+            <h2 className="text-xl font-semibold text-blue-900">{isPrepaid ? 'Top Up History' : 'Payment History'}</h2>
           </div>
 
           <div className="space-y-4">

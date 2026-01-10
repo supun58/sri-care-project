@@ -1,136 +1,156 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Globe, Music, Wifi, Phone, Zap, Shield, MessageSquare, Radio } from 'lucide-react';
+import { api } from '../api/api';
+import type { User } from '../App';
 
 type Service = {
-  id: string;
+  id: number;
   name: string;
   description: string;
   icon: typeof Globe;
   price: number;
-  active: boolean;
   category: 'data' | 'voice' | 'vas';
 };
 
-export function Services() {
-  const [services, setServices] = useState<Service[]>([
-    {
-      id: '1',
-      name: 'International Roaming',
-      description: 'Use your mobile services while traveling abroad',
-      icon: Globe,
-      price: 500,
-      active: true,
-      category: 'voice'
-    },
-    {
-      id: '2',
-      name: 'Ring-in Tone',
-      description: 'Personalize your caller tune',
-      icon: Music,
-      price: 50,
-      active: true,
-      category: 'vas'
-    },
-    {
-      id: '3',
-      name: 'Data Top-up 5GB',
-      description: 'Additional 5GB data for 30 days',
-      icon: Wifi,
-      price: 250,
-      active: false,
-      category: 'data'
-    },
-    {
-      id: '4',
-      name: 'Data Top-up 10GB',
-      description: 'Additional 10GB data for 30 days',
-      icon: Wifi,
-      price: 450,
-      active: false,
-      category: 'data'
-    },
-    {
-      id: '5',
-      name: 'Unlimited Calls Package',
-      description: 'Unlimited local calls for 30 days',
-      icon: Phone,
-      price: 350,
-      active: false,
-      category: 'voice'
-    },
-    {
-      id: '6',
-      name: 'Call Waiting',
-      description: 'Never miss a call while on another call',
-      icon: Phone,
-      price: 25,
-      active: false,
-      category: 'voice'
-    },
-    {
-      id: '7',
-      name: 'SMS Package 1000',
-      description: '1000 SMS for 30 days',
-      icon: MessageSquare,
-      price: 100,
-      active: false,
-      category: 'vas'
-    },
-    {
-      id: '8',
-      name: 'Voicemail',
-      description: 'Record messages when you are unavailable',
-      icon: Radio,
-      price: 30,
-      active: false,
-      category: 'vas'
-    },
-    {
-      id: '9',
-      name: 'Data Security Shield',
-      description: 'Protect your mobile data with advanced security',
-      icon: Shield,
-      price: 150,
-      active: false,
-      category: 'vas'
-    },
-    {
-      id: '10',
-      name: '4G Turbo Boost',
-      description: 'Enhanced 4G speeds for better streaming',
-      icon: Zap,
-      price: 200,
-      active: false,
-      category: 'data'
-    }
-  ]);
+type UserService = {
+  id: number;
+  service_id: number;
+  user_id: number;
+  status: string;
+  service_name: string;
+  price: number;
+};
 
+type ServicesProps = {
+  user: User;
+  onRefreshUser?: () => Promise<void>;
+  initialFilter?: string | null;
+};
+
+export function Services({ user, onRefreshUser, initialFilter }: ServicesProps) {
+  const [allServices, setAllServices] = useState<Service[]>([]);
+  const [userServices, setUserServices] = useState<UserService[]>([]);
+  const [loading, setLoading] = useState(true);
   const [selectedCategory, setSelectedCategory] = useState<'all' | 'data' | 'voice' | 'vas'>('all');
   const [showModal, setShowModal] = useState(false);
   const [selectedService, setSelectedService] = useState<Service | null>(null);
   const [actionType, setActionType] = useState<'activate' | 'deactivate'>('activate');
+  const [actionLoading, setActionLoading] = useState(false);
+  const [actionError, setActionError] = useState('');
+
+  // Set initial filter if provided
+  useEffect(() => {
+    if (initialFilter && (initialFilter === 'data' || initialFilter === 'voice' || initialFilter === 'vas')) {
+      setSelectedCategory(initialFilter);
+    }
+  }, [initialFilter]);
+
+  useEffect(() => {
+    const fetchServices = async () => {
+      try {
+        const [allRes, userRes] = await Promise.all([
+          api.getServices(''),
+          api.getUserServices(user.id)
+        ]);
+        
+        if (allRes.data.success) {
+          const servicesWithIcons = (allRes.data.services || []).map((s: any) => ({
+            ...s,
+            icon: getServiceIcon(s.name),
+            category: getServiceCategory(s.name),
+            description: s.description || 'Premium service'
+          }));
+          setAllServices(servicesWithIcons);
+        }
+
+        if (userRes.data.success) {
+          setUserServices(userRes.data.services || []);
+        }
+      } catch (error) {
+        console.error('Error fetching services:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    if (user.id) {
+      fetchServices();
+    }
+  }, [user.id]);
+
+  function getServiceIcon(serviceName: string) {
+    const name = serviceName.toLowerCase();
+    if (name.includes('roaming') || name.includes('international')) return Globe;
+    if (name.includes('tone') || name.includes('ring') || name.includes('music')) return Music;
+    if (name.includes('data') || name.includes('wifi') || name.includes('5gb') || name.includes('10gb')) return Wifi;
+    if (name.includes('call') || name.includes('voice') || name.includes('minute')) return Phone;
+    if (name.includes('speed') || name.includes('turbo')) return Zap;
+    if (name.includes('security') || name.includes('shield')) return Shield;
+    if (name.includes('sms') || name.includes('message')) return MessageSquare;
+    if (name.includes('voicemail') || name.includes('radio')) return Radio;
+    return Globe;
+  }
+
+  function getServiceCategory(serviceName: string): 'data' | 'voice' | 'vas' {
+    const name = serviceName.toLowerCase();
+    if (name.includes('data') || name.includes('5gb') || name.includes('10gb') || name.includes('wifi')) return 'data';
+    if (name.includes('call') || name.includes('voice') || name.includes('roaming') || name.includes('minute')) return 'voice';
+    return 'vas';
+  }
+
+  const isServiceActive = (serviceId: number) => {
+    return userServices.some(us => us.service_id === serviceId && us.status === 'active');
+  };
 
   const handleToggleService = (service: Service) => {
     setSelectedService(service);
-    setActionType(service.active ? 'deactivate' : 'activate');
+    setActionType(isServiceActive(service.id) ? 'deactivate' : 'activate');
     setShowModal(true);
+    setActionError('');
   };
 
-  const confirmAction = () => {
-    if (selectedService) {
-      setServices(services.map(s => 
-        s.id === selectedService.id 
-          ? { ...s, active: !s.active }
-          : s
-      ));
-      setShowModal(false);
-      setSelectedService(null);
+  const confirmAction = async () => {
+    if (!selectedService) return;
+
+    setActionLoading(true);
+    setActionError('');
+
+    try {
+      let response;
+      if (actionType === 'activate') {
+        response = await api.purchaseService(user.id, selectedService.id);
+      } else {
+        response = await api.deactivateService(user.id, selectedService.id);
+      }
+
+      if (response.data.success) {
+        // Refresh user services
+        const userRes = await api.getUserServices(user.id);
+        if (userRes.data.success) {
+          setUserServices(userRes.data.services || []);
+        }
+        
+        // Refresh user data in parent to update balance/data/minutes
+        if (onRefreshUser) {
+          await onRefreshUser();
+        }
+        
+        setShowModal(false);
+        setSelectedService(null);
+      } else {
+        setActionError(response.data.message || 'Action failed');
+      }
+    } catch (error: any) {
+      setActionError(error.response?.data?.message || 'An error occurred');
+      console.error('Error:', error);
+    } finally {
+      setActionLoading(false);
     }
   };
 
   const filteredServices = selectedCategory === 'all' 
-    ? services 
-    : services.filter(s => s.category === selectedCategory);
+    ? allServices
+    : allServices.filter(s => s.category === selectedCategory);
 
   const categories = [
     { id: 'all' as const, label: 'All Services' },
@@ -138,6 +158,17 @@ export function Services() {
     { id: 'voice' as const, label: 'Voice Services' },
     { id: 'vas' as const, label: 'Value Added' }
   ];
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-blue-600">Loading services...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -167,28 +198,29 @@ export function Services() {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {filteredServices.map(service => {
           const Icon = service.icon;
+          const isActive = isServiceActive(service.id);
           return (
             <div
               key={service.id}
               className={`bg-white rounded-xl p-6 shadow-lg border-2 transition-all ${
-                service.active 
-                  ? 'border-green-400 bg-green-50/50' 
+                isActive
+                  ? 'border-green-400 bg-green-50/50'
                   : 'border-blue-100 hover:border-blue-300'
               }`}
             >
               <div className="flex items-start justify-between mb-4">
                 <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${
-                  service.active 
-                    ? 'bg-green-100' 
+                  isActive
+                    ? 'bg-green-100'
                     : 'bg-blue-100'
                 }`}>
                   <Icon className={`w-6 h-6 ${
-                    service.active 
-                      ? 'text-green-600' 
+                    isActive
+                      ? 'text-green-600'
                       : 'text-blue-600'
                   }`} />
                 </div>
-                {service.active && (
+                {isActive && (
                   <span className="bg-green-500 text-white text-xs font-semibold px-3 py-1 rounded-full">
                     Active
                   </span>
@@ -196,8 +228,20 @@ export function Services() {
               </div>
 
               <h3 className="font-semibold text-blue-900 mb-2">{service.name}</h3>
-              <p className="text-sm text-blue-600 mb-4">{service.description}</p>
-              
+              <p className="text-sm text-blue-600 mb-3">{service.description}</p>
+
+              {/* Service Benefits */}
+              {service.category === 'data' && (
+                <div className="text-xs bg-purple-50 p-2 rounded mb-3 text-purple-700">
+                  📊 Adds data to your account
+                </div>
+              )}
+              {service.category === 'voice' && (
+                <div className="text-xs bg-green-50 p-2 rounded mb-3 text-green-700">
+                  ☎️ Adds voice minutes to your account
+                </div>
+              )}
+
               <div className="flex items-center justify-between">
                 <span className="text-lg font-bold text-blue-900">
                   LKR {service.price}/mo
@@ -205,12 +249,12 @@ export function Services() {
                 <button
                   onClick={() => handleToggleService(service)}
                   className={`px-4 py-2 rounded-lg font-medium transition-colors ${
-                    service.active
+                    isActive
                       ? 'bg-red-600 hover:bg-red-700 text-white'
                       : 'bg-blue-600 hover:bg-blue-700 text-white'
                   }`}
                 >
-                  {service.active ? 'Deactivate' : 'Activate'}
+                  {isActive ? 'Deactivate' : 'Activate'}
                 </button>
               </div>
             </div>
@@ -228,21 +272,43 @@ export function Services() {
             <p className="text-blue-700 mb-6">
               Are you sure you want to {actionType} <strong>{selectedService.name}</strong>?
               {actionType === 'activate' && (
-                <span className="block mt-2 text-sm">
-                  Monthly charge: LKR {selectedService.price}
-                </span>
+                <div className="block mt-3 space-y-2 text-sm bg-blue-50 p-3 rounded-lg">
+                  <p>Monthly charge: LKR {selectedService.price}</p>
+                  {user.accountType === 'prepaid' && (
+                    <p className="text-blue-600">
+                      This amount will be <strong>deducted</strong> from your account balance
+                    </p>
+                  )}
+                  {user.accountType === 'postpaid' && (
+                    <p className="text-orange-600">
+                      This amount will be <strong>added</strong> to your current bill
+                    </p>
+                  )}
+                </div>
+              )}
+              {actionType === 'deactivate' && (
+                <div className="block mt-3 text-sm bg-yellow-50 p-3 rounded-lg text-yellow-800 border border-yellow-200">
+                  Service charges will <strong>not be refunded</strong> if deactivated
+                </div>
               )}
             </p>
+            {actionError && (
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">
+                {actionError}
+              </div>
+            )}
             <div className="flex gap-3">
               <button
                 onClick={confirmAction}
-                className="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-colors"
+                disabled={actionLoading}
+                className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-semibold py-3 rounded-lg transition-colors"
               >
-                Confirm
+                {actionLoading ? 'Processing...' : 'Confirm'}
               </button>
               <button
                 onClick={() => setShowModal(false)}
-                className="flex-1 bg-gray-200 hover:bg-gray-300 text-gray-800 font-semibold py-3 rounded-lg transition-colors"
+                disabled={actionLoading}
+                className="flex-1 bg-gray-200 hover:bg-gray-300 disabled:bg-gray-400 text-gray-800 font-semibold py-3 rounded-lg transition-colors"
               >
                 Cancel
               </button>

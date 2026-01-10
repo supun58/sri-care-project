@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { FileText, Download, Calendar, DollarSign, CheckCircle, AlertCircle } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { FileText, Download, Calendar, DollarSign, CheckCircle, AlertCircle, Wallet } from 'lucide-react';
+import type { User } from '../App';
 
 type Bill = {
   id: string;
@@ -11,7 +12,21 @@ type Bill = {
   paidDate?: string;
 };
 
-export function Bills() {
+type TopUpHistory = {
+  id: string;
+  date: string;
+  amount: number;
+  method: string;
+  reference: string;
+};
+
+type BillsProps = {
+  user: User;
+  onNavigateToPayments?: (amount: number) => void;
+};
+
+export function Bills({ user, onNavigateToPayments }: BillsProps) {
+  const isPrepaid = user.accountType === 'prepaid';
   const [bills] = useState<Bill[]>([
     {
       id: '1',
@@ -109,43 +124,57 @@ export function Bills() {
   return (
     <div>
       <div className="mb-6">
-        <h1 className="text-3xl font-bold text-blue-900 mb-2">Bills</h1>
-        <p className="text-blue-600">View and manage your billing history</p>
+        <h1 className="text-3xl font-bold text-blue-900 mb-2">{isPrepaid ? 'Account Balance' : 'Bills'}</h1>
+        <p className="text-blue-600">{isPrepaid ? 'View your balance and reload history' : 'View and manage your billing history'}</p>
       </div>
 
-      {/* Current Bill Highlight */}
-      {bills.some(b => b.status === 'pending') && (
-        <div className="bg-gradient-to-r from-blue-600 to-blue-700 rounded-2xl p-6 text-white mb-6 shadow-xl">
-          <div className="flex items-start justify-between">
-            <div>
-              <h2 className="text-xl font-semibold mb-2">Current Bill</h2>
-              <p className="text-blue-100 mb-4">
-                {bills.find(b => b.status === 'pending')?.month} {bills.find(b => b.status === 'pending')?.year}
-              </p>
-              <div className="flex items-baseline gap-2">
-                <span className="text-4xl font-bold">
-                  LKR {bills.find(b => b.status === 'pending')?.amount.toFixed(2)}
-                </span>
-              </div>
-              <p className="text-blue-100 mt-2">
-                Due: {new Date(bills.find(b => b.status === 'pending')?.dueDate || '').toLocaleDateString('en-US', { 
+      {/* Current Balance/Bill Highlight */}
+      <div className={`bg-gradient-to-r ${isPrepaid ? 'from-blue-600 to-blue-700' : 'from-orange-600 to-orange-700'} rounded-2xl p-6 text-white mb-6 shadow-xl`}>
+        <div className="flex items-start justify-between">
+          <div>
+            <h2 className="text-xl font-semibold mb-2">{isPrepaid ? 'Current Balance' : 'Current Bill'}</h2>
+            {!isPrepaid && (
+              <p className="text-blue-100 mb-4">December 2025</p>
+            )}
+            <div className="flex items-baseline gap-2">
+              <span className="text-4xl font-bold">
+                LKR {isPrepaid ? user.accountBalance.toFixed(2) : user.currentBill.toFixed(2)}
+              </span>
+            </div>
+            {!isPrepaid && (
+              <p className="text-orange-100 mt-2">
+                Due: {new Date('2026-01-15').toLocaleDateString('en-US', { 
                   month: 'long', 
                   day: 'numeric', 
                   year: 'numeric' 
                 })}
               </p>
-            </div>
-            <button className="bg-white text-blue-600 hover:bg-blue-50 px-6 py-3 rounded-lg font-semibold transition-colors">
-              Pay Now
-            </button>
+            )}
+            {isPrepaid && user.accountBalance === 0 && (
+              <p className="text-blue-100 mt-2">Top up your account to continue using services</p>
+            )}
           </div>
+          <button 
+            onClick={() => onNavigateToPayments?.(isPrepaid ? 0 : user.currentBill)}
+            className="bg-white hover:bg-blue-50 px-6 py-3 rounded-lg font-semibold transition-colors flex items-center gap-2"
+            style={{ color: isPrepaid ? '#2563eb' : '#ea580c' }}
+          >
+            {isPrepaid ? (
+              <>
+                <Wallet className="w-5 h-5" />
+                Top Up
+              </>
+            ) : (
+              'Pay Now'
+            )}
+          </button>
         </div>
-      )}
+      </div>
 
-      {/* Bills List */}
+      {/* History List */}
       <div className="bg-white rounded-xl shadow-lg border border-blue-100 overflow-hidden">
         <div className="p-6 border-b border-blue-100">
-          <h2 className="text-xl font-semibold text-blue-900">Billing History</h2>
+          <h2 className="text-xl font-semibold text-blue-900">{isPrepaid ? 'Reload History' : 'Billing History'}</h2>
         </div>
 
         <div className="divide-y divide-blue-100">

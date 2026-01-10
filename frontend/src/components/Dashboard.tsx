@@ -17,6 +17,7 @@ import { Bills } from './Bills';
 import { Payments } from './Payments';
 import { Notifications } from './Notifications';
 import { Chat } from './Chat';
+import { api } from '../api/api';
 
 type DashboardProps = {
   user: User;
@@ -25,9 +26,52 @@ type DashboardProps = {
 
 type Tab = 'overview' | 'services' | 'bills' | 'payments' | 'notifications' | 'chat';
 
-export function Dashboard({ user, onLogout }: DashboardProps) {
+export function Dashboard({ user: initialUser, onLogout }: DashboardProps) {
   const [activeTab, setActiveTab] = useState<Tab>('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [user, setUser] = useState<User>(initialUser);
+  const [serviceFilter, setServiceFilter] = useState<string | null>(null);
+  const [paymentAmount, setPaymentAmount] = useState<number>(0);
+
+  const refreshUserData = async () => {
+    try {
+      const response = await api.getProfile(user.id);
+      if (response.data.success && response.data.user) {
+        const updatedUser = response.data.user;
+        setUser({
+          id: String(updatedUser.id),
+          name: updatedUser.name,
+          phone: updatedUser.phone,
+          mobile: updatedUser.phone,
+          email: updatedUser.email,
+          accountNumber: updatedUser.accountNumber,
+          accountType: updatedUser.accountType || 'prepaid',
+          accountBalance: updatedUser.accountBalance || 0,
+          currentBill: updatedUser.currentBill || 0,
+          dataRemaining: updatedUser.dataRemaining || 0,
+          minutesRemaining: updatedUser.minutesRemaining || 0
+        });
+      }
+    } catch (error) {
+      console.error('Error refreshing user data:', error);
+    }
+  };
+
+  const handleTabChange = (tab: Tab, filter?: string) => {
+    setActiveTab(tab);
+    if (tab === 'services' && filter) {
+      setServiceFilter(filter);
+    } else {
+      setServiceFilter(null);
+    }
+    setSidebarOpen(false);
+  };
+
+  const handleNavigateToPayments = (amount: number) => {
+    setPaymentAmount(amount);
+    setActiveTab('payments');
+    setSidebarOpen(false);
+  };
 
   const menuItems = [
     { id: 'overview' as Tab, label: 'Overview', icon: LayoutDashboard },
@@ -134,10 +178,33 @@ export function Dashboard({ user, onLogout }: DashboardProps) {
 
         {/* Content Area */}
         <div className="p-4 lg:p-8">
-          {activeTab === 'overview' && <Overview user={user} />}
-          {activeTab === 'services' && <Services />}
-          {activeTab === 'bills' && <Bills />}
-          {activeTab === 'payments' && <Payments />}
+          {activeTab === 'overview' && (
+            <Overview 
+              user={user} 
+              onNavigateToServices={handleTabChange}
+              onRefreshUser={refreshUserData}
+            />
+          )}
+          {activeTab === 'services' && (
+            <Services 
+              user={user} 
+              onRefreshUser={refreshUserData}
+              initialFilter={serviceFilter}
+            />
+          )}
+          {activeTab === 'bills' && (
+            <Bills 
+              user={user}
+              onNavigateToPayments={handleNavigateToPayments}
+            />
+          )}
+          {activeTab === 'payments' && (
+            <Payments 
+              user={user}
+              initialAmount={paymentAmount}
+              onPaymentSuccess={refreshUserData}
+            />
+          )}
           {activeTab === 'notifications' && <Notifications />}
           {activeTab === 'chat' && <Chat user={user} />}
         </div>

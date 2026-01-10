@@ -1,24 +1,35 @@
 import { useState } from 'react';
-import { Smartphone, Lock, Mail, User, ArrowLeft, CheckCircle2 } from 'lucide-react';
+import axios from 'axios';
+import { Smartphone, Lock, Mail, User as UserIcon, ArrowLeft, CheckCircle2 } from 'lucide-react';
+import { api } from '../api/api';
+import type { User } from '../App';
 
 type RegisterProps = {
   onRegisterSuccess: () => void;
   onBackToLogin: () => void;
+  onLogin: (user: User) => void;
 };
 
-export function Register({ onRegisterSuccess, onBackToLogin }: RegisterProps) {
+export function Register({ onRegisterSuccess, onBackToLogin, onLogin }: RegisterProps) {
   const [formData, setFormData] = useState({
     name: '',
     mobile: '',
     email: '',
     password: '',
-    confirmPassword: '',
-    accountNumber: ''
+    confirmPassword: ''
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [step, setStep] = useState<'verify' | 'details'>('verify');
   const [otpSent, setOtpSent] = useState(false);
   const [otp, setOtp] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [submitError, setSubmitError] = useState('');
+  const [existingModalOpen, setExistingModalOpen] = useState(false);
+  const [existingUser, setExistingUser] = useState<any>(null);
+  const [existingPassword, setExistingPassword] = useState('');
+  const [existingLoginError, setExistingLoginError] = useState('');
+  const [successModalOpen, setSuccessModalOpen] = useState(false);
+
 
   const handleChange = (field: string, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }));
@@ -28,12 +39,10 @@ export function Register({ onRegisterSuccess, onBackToLogin }: RegisterProps) {
   const validateVerification = () => {
     const newErrors: Record<string, string> = {};
     
-    if (!formData.mobile.match(/^0[0-9]{9}$/)) {
-      newErrors.mobile = 'Please enter a valid 10-digit mobile number';
+    if (!formData.mobile.match(/^07\d{8}$/)) {
+      newErrors.mobile = 'Use Sri Lankan format 07XXXXXXXX';
     }
-    if (!formData.accountNumber) {
-      newErrors.accountNumber = 'Account number is required';
-    }
+    // Account number no longer required; backend auto-generates
     
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -66,21 +75,70 @@ export function Register({ onRegisterSuccess, onBackToLogin }: RegisterProps) {
     }
   };
 
-  const handleVerifyOTP = () => {
+  const handleVerifyOTP = async () => {
     if (otp === '123456' || otp.length === 6) {
-      setStep('details');
+      try {
+        const res = await api.checkUserExists(formData.mobile);
+        const { success, exists, user } = res.data ?? {};
+        if (success && exists && user) {
+          setExistingUser(user);
+          setExistingModalOpen(true);
+        } else {
+          setStep('details');
+        }
+      } catch (e) {
+        // If check fails, continue to details step
+        setStep('details');
+      }
     } else {
       setErrors({ otp: 'Invalid OTP' });
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (validateDetails()) {
-      // Mock registration success
-      setTimeout(() => {
-        onRegisterSuccess();
-      }, 500);
+    setSubmitError('');
+    if (!validateDetails()) return;
+
+    setIsLoading(true);
+    try {
+      const payload = {
+        phone: formData.mobile,
+        password: formData.password,
+        email: formData.email,
+        name: formData.name,
+      };
+      const response = await api.register(payload);
+      const { success, token, user, message } = response.data ?? {};
+
+      if (!success) {
+        setSubmitError(message ?? 'Registration failed.');
+        return;
+      }
+
+      if (token) {
+        localStorage.setItem('token', token);
+      }
+
+      // Send notification (best-effort)
+      try {
+        if (user?.id) {
+          await api.sendNotification({ type: 'alert', message: 'Your Sri-Care account was created successfully.', userId: String(user.id) });
+        }
+      } catch {}
+
+      // Show success modal and auto-login on confirmation
+      setSuccessModalOpen(true);
+
+    } catch (err) {
+      if (axios.isAxiosError(err)) {
+        const serverMessage = err.response?.data?.message;
+        setSubmitError(serverMessage ?? 'Unable to register. Please try again.');
+      } else {
+        setSubmitError('Something went wrong. Please try again.');
+      }
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -107,9 +165,98 @@ export function Register({ onRegisterSuccess, onBackToLogin }: RegisterProps) {
 
         {/* Registration Card */}
         <div className="bg-white rounded-2xl shadow-xl p-8 border border-blue-100">
+          {existingModalOpen && existingUser && (
+            <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+              <div className="bg-white rounded-xl p-6 shadow-xl w-full max-w-md">
+                <h3 className="text-lg font-semibold text-blue-900 mb-2">Account Already Exists</h3>
+                <p className="text-blue-700 mb-4">We found an existing Sri-Care account for {existingUser.phone}. Enter your password to auto-login.</p>
+                {existingLoginError && (
+                  <div className="mb-3 p-2 bg-red-50 border border-red-200 text-red-700 text-sm rounded">
+                    {existingLoginError}
+                  </div>
+                )}
+                <input
+                  type="password"
+                  value={existingPassword}
+                  onChange={(e) => setExistingPassword(e.target.value)}
+                  placeholder="Enter your password"
+                  className="w-full px-4 py-3 border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none mb-4"
+                />
+                <div className="flex gap-2 justify-end">
+                  <button onClick={() => { setExistingModalOpen(false); setExistingPassword(''); }} className="px-4 py-2 rounded-lg bg-blue-50 text-blue-700">Cancel</button>
+                  <button onClick={async () => {
+                    setExistingLoginError('');
+                    try {
+                      const res = await api.login(formData.mobile, existingPassword);
+                      const { success, token, user } = res.data ?? {};
+                      if (!success || !user || !token) {
+                        setExistingLoginError('Login failed. Check your password.');
+                        return;
+                      }
+                      localStorage.setItem('token', token);
+                      try {
+                        await api.sendNotification({ type: 'alert', message: 'Successful login', userId: String(user.id) });
+                      } catch {}
+                      const mapped = {
+                        id: String(user.id),
+                        name: user.name ?? 'Customer',
+                        mobile: user.phone ?? formData.mobile,
+                        email: user.email ?? `${formData.mobile}@stl.lk`,
+                        accountNumber: user.accountNumber ?? 'STL' + (user.phone ?? formData.mobile).slice(-6)
+                      };
+                      onLogin(mapped);
+                    } catch (err) {
+                      setExistingLoginError('Unable to login.');
+                    }
+                  }} className="px-4 py-2 rounded-lg bg-blue-600 text-white">Auto Login</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {successModalOpen && (
+            <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+              <div className="bg-white rounded-xl p-6 shadow-xl w-full max-w-md">
+                <h3 className="text-lg font-semibold text-blue-900 mb-2">Account Created</h3>
+                <p className="text-blue-700 mb-4">Your Sri-Care account has been created successfully. Click OK to continue.</p>
+                <div className="flex justify-end">
+                  <button onClick={async () => {
+                    setSuccessModalOpen(false);
+                    // Auto-login using entered credentials
+                    try {
+                      const res = await api.login(formData.mobile, formData.password);
+                      const { success, token, user } = res.data ?? {};
+                      if (success && token && user) {
+                        localStorage.setItem('token', token);
+                        const mapped = {
+                          id: String(user.id),
+                          name: user.name ?? formData.name,
+                          phone: user.phone ?? formData.mobile,
+                          mobile: user.phone ?? formData.mobile,
+                          email: user.email ?? formData.email,
+                          accountNumber: user.accountNumber ?? 'STL' + (user.phone ?? formData.mobile).slice(-6),
+                          accountType: user.accountType ?? 'prepaid',
+                          accountBalance: user.accountBalance ?? 0,
+                          currentBill: user.currentBill ?? 0,
+                          dataRemaining: user.dataRemaining ?? 0,
+                          minutesRemaining: user.minutesRemaining ?? 0
+                        };
+                        onLogin(mapped);
+                      } else {
+                        onRegisterSuccess();
+                      }
+                    } catch {
+                      onRegisterSuccess();
+                    }
+                  }} className="px-4 py-2 rounded-lg bg-blue-600 text-white">OK</button>
+                </div>
+              </div>
+            </div>
+          )}
+
           {step === 'verify' ? (
             <div>
-              <h2 className="text-xl font-semibold text-blue-900 mb-6">Verify Your Account</h2>
+              <h2 className="text-xl font-semibold text-blue-900 mb-6">Verify Your Mobile</h2>
               
               <div className="space-y-4">
                 <div>
@@ -131,22 +278,7 @@ export function Register({ onRegisterSuccess, onBackToLogin }: RegisterProps) {
                   {errors.mobile && <p className="mt-1 text-sm text-red-600">{errors.mobile}</p>}
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-blue-900 mb-2">
-                    Account Number
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.accountNumber}
-                    onChange={(e) => handleChange('accountNumber', e.target.value)}
-                    placeholder="Enter your STL account number"
-                    className="w-full px-4 py-3 border border-blue-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none"
-                  />
-                  {errors.accountNumber && <p className="mt-1 text-sm text-red-600">{errors.accountNumber}</p>}
-                  <p className="mt-2 text-xs text-blue-600">
-                    Find your account number on your bill or SMS from Sri Tel
-                  </p>
-                </div>
+                
 
                 {!otpSent ? (
                   <button
@@ -202,13 +334,18 @@ export function Register({ onRegisterSuccess, onBackToLogin }: RegisterProps) {
               <h2 className="text-xl font-semibold text-blue-900 mb-6">Complete Your Profile</h2>
               
               <div className="space-y-4">
+                {submitError && (
+                  <div className="p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
+                    {submitError}
+                  </div>
+                )}
                 <div>
                   <label className="block text-sm font-medium text-blue-900 mb-2">
                     Full Name
                   </label>
                   <div className="relative">
                     <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-                      <User className="h-5 w-5 text-blue-400" />
+                      <UserIcon className="h-5 w-5 text-blue-400" />
                     </div>
                     <input
                       type="text"
@@ -280,9 +417,10 @@ export function Register({ onRegisterSuccess, onBackToLogin }: RegisterProps) {
 
                 <button
                   type="submit"
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-colors shadow-lg hover:shadow-xl mt-6"
+                  disabled={isLoading}
+                  className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 disabled:cursor-not-allowed text-white font-semibold py-3 rounded-lg transition-colors shadow-lg hover:shadow-xl mt-6"
                 >
-                  Create Account
+                  {isLoading ? 'Creating Account...' : 'Create Account'}
                 </button>
               </div>
             </form>

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User as UserIcon, Clock, CheckCheck } from 'lucide-react';
+import { Send, Bot, User as UserIcon, Clock, CheckCheck, AlertCircle } from 'lucide-react';
 import type { User } from '../App';
+import { api } from '../api/api';
 
 type Message = {
   id: string;
@@ -8,6 +9,7 @@ type Message = {
   text: string;
   timestamp: Date;
   read?: boolean;
+  senderName?: string;
 };
 
 type ChatProps = {
@@ -15,27 +17,17 @@ type ChatProps = {
 };
 
 export function Chat({ user }: ChatProps) {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: '1',
-      sender: 'bot',
-      text: `Hello ${user.name.split(' ')[0]}! 👋 Welcome to Sri Tel Customer Support. How can I help you today?`,
-      timestamp: new Date(Date.now() - 60000),
-      read: true
-    },
-    {
-      id: '2',
-      sender: 'bot',
-      text: 'I can help you with:\n• Bill inquiries\n• Service activation/deactivation\n• Payment issues\n• Technical support\n\nOr type your question and I\'ll connect you with an agent if needed.',
-      timestamp: new Date(Date.now() - 55000),
-      read: true
-    }
-  ]);
-
+  const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const [agentOnline, setAgentOnline] = useState(true);
+  const [isConnected, setIsConnected] = useState(false);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [agentName, setAgentName] = useState<string | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -45,14 +37,132 @@ export function Chat({ user }: ChatProps) {
     scrollToBottom();
   }, [messages]);
 
+  // Initialize chat session and WebSocket
+  useEffect(() => {
+    let ws: WebSocket | null = null;
+    
+    const initChat = async () => {
+      try {
+        // Create/get session
+        const response = await api.createChatSession(user.id, user.name);
+        
+        if (response.data.success && response.data.data) {
+          const session = response.data.data;
+          setSessionId(session.session_id);
+          
+          // Load chat history
+          const historyResponse = await api.getChatHistory(session.session_id);
+          if (historyResponse.data.success && Array.isArray(historyResponse.data.data)) {
+            const loadedMessages = historyResponse.data.data.map((msg: any) => ({
+              id: msg.id.toString(),
+              sender: msg.sender_type,
+              text: msg.message,
+              timestamp: new Date(msg.created_at),
+              read: msg.sender_type === 'user' ? msg.read_by_agent : msg.read_by_user,
+              senderName: msg.sender_name
+            }));
+            setMessages(loadedMessages);
+          }
+          
+          // Connect WebSocket to backend server (Vite env)
+          const wsEnv = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_WS_URL) ? import.meta.env.VITE_WS_URL : undefined;
+          const wsUrl = wsEnv || 'ws://localhost:5001';
+          ws = new WebSocket(wsUrl);
+          wsRef.current = ws;
+          
+          ws.onopen = () => {
+            console.log('✅ WebSocket connected');
+            setIsConnected(true);
+            setConnectionError(null);
+            
+            // Send init message
+            ws?.send(JSON.stringify({
+              type: 'init',
+              sessionId: session.session_id,
+              userId: user.id,
+              userName: user.name
+            }));
+          };
+          
+          ws.onmessage = (event) => {
+            try {
+              const data = JSON.parse(event.data);
+              
+              if (data.type === 'message_received') {
+                const msg = data.message;
+                setMessages(prev => [...prev, {
+                  id: msg.id.toString(),
+                  sender: msg.sender_type,
+                  text: msg.message,
+                  timestamp: new Date(msg.created_at),
+                  read: false,
+                  senderName: msg.sender_name
+                }]);
+                setIsTyping(false);
+                
+                // Extract agent name
+                if (msg.sender_type === 'agent' && msg.sender_name) {
+                  setAgentName(msg.sender_name);
+                }
+              } else if (data.type === 'message_sent') {
+                // Message successfully sent, update UI if needed
+                setIsTyping(true);
+              } else if (data.type === 'session_closed') {
+                setIsConnected(false);
+              }
+            } catch (error) {
+              console.error('WebSocket message parse error:', error);
+            }
+          };
+          
+          ws.onclose = () => {
+            console.log('❌ WebSocket disconnected');
+            setIsConnected(false);
+          };
+          
+          ws.onerror = (error) => {
+            console.error('WebSocket error:', error);
+            setConnectionError('Connection error. Messages may be delayed.');
+            setIsConnected(false);
+          };
+        }
+      } catch (error) {
+        console.error('Failed to initialize chat:', error);
+        setConnectionError('Failed to connect to chat service');
+      }
+    };
+    
+    initChat();
+    
+    // Cleanup on unmount
+    return () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+    };
+  }, [user.id, user.name]);
+
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!inputMessage.trim()) return;
+    if (!inputMessage.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
+      return;
+    }
 
-    // Add user message
+    // Send message via WebSocket
+    wsRef.current.send(JSON.stringify({
+      type: 'message',
+      message: inputMessage,
+      userName: user.name,
+      timestamp: new Date().toISOString()
+    }));
+
+    // Add user message to UI immediately
     const userMessage: Message = {
-      id: Date.now().toString(),
+      id: `temp_${Date.now()}`,
       sender: 'user',
       text: inputMessage,
       timestamp: new Date(),
@@ -61,76 +171,30 @@ export function Chat({ user }: ChatProps) {
 
     setMessages(prev => [...prev, userMessage]);
     setInputMessage('');
-    setIsTyping(true);
-
-    // Simulate bot/agent response
-    setTimeout(() => {
-      const response = generateResponse(inputMessage);
-      const botMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        sender: response.isAgent ? 'agent' : 'bot',
-        text: response.text,
-        timestamp: new Date(),
-        read: false
-      };
-      
-      setMessages(prev => [...prev, botMessage]);
-      setIsTyping(false);
-    }, 1500 + Math.random() * 1000);
+    
+    // Send typing indicator
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+    
+    typingTimeoutRef.current = setTimeout(() => {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({
+          type: 'typing',
+          timestamp: new Date().toISOString()
+        }));
+      }
+    }, 300);
   };
 
-  const generateResponse = (userMsg: string): { text: string; isAgent: boolean } => {
-    const msg = userMsg.toLowerCase();
-    
-    if (msg.includes('bill') || msg.includes('payment')) {
-      return {
-        text: 'I can see your current bill is LKR 1,250.00 due on January 15, 2026. Would you like to make a payment now or need more details about your bill?',
-        isAgent: false
-      };
-    }
-    
-    if (msg.includes('data') || msg.includes('internet')) {
-      return {
-        text: 'You currently have 15.5 GB of data remaining from your 25 GB package. Would you like to top up or upgrade your data plan?',
-        isAgent: false
-      };
-    }
-    
-    if (msg.includes('roaming')) {
-      return {
-        text: 'International Roaming is currently active on your account. The service costs LKR 500/month. Would you like to deactivate it or need information about roaming rates?',
-        isAgent: false
-      };
-    }
-    
-    if (msg.includes('agent') || msg.includes('human') || msg.includes('representative')) {
-      return {
-        text: 'Connecting you with a customer service agent. Please hold...\n\nAgent Priya has joined the chat. Hello! How may I assist you today?',
-        isAgent: true
-      };
-    }
-
-    if (msg.includes('hello') || msg.includes('hi')) {
-      return {
-        text: 'Hello! How can I assist you today? Feel free to ask about your bills, services, data usage, or any other account-related questions.',
-        isAgent: false
-      };
-    }
-
-    if (msg.includes('thank')) {
-      return {
-        text: 'You\'re welcome! Is there anything else I can help you with today?',
-        isAgent: false
-      };
-    }
-    
-    return {
-      text: 'I understand you need help with that. Let me connect you with one of our customer service agents who can better assist you.\n\nAgent Kasun has joined the chat. Hello! I\'ll be happy to help you with your inquiry.',
-      isAgent: true
-    };
-  };
-
-  const quickActions = [
+  const isPrepaid = user.accountType === 'prepaid';
+  const quickActions = isPrepaid ? [
+    'Check my balance',
+    'Data usage',
+    'Activate roaming',
+    'Top up account',
+    'Talk to agent'
+  ] : [
     'Check my bill',
     'Data usage',
     'Activate roaming',
@@ -142,7 +206,13 @@ export function Chat({ user }: ChatProps) {
     <div className="h-[calc(100vh-12rem)] flex flex-col">
       <div className="mb-4">
         <h1 className="text-3xl font-bold text-blue-900 mb-2">Customer Support Chat</h1>
-        <p className="text-blue-600">Chat with our support team for instant assistance</p>
+        <p className="text-blue-600">Real-time chat with our support team</p>
+        {connectionError && (
+          <div className="mt-2 flex items-center gap-2 text-sm text-red-600">
+            <AlertCircle className="w-4 h-4" />
+            <span>{connectionError}</span>
+          </div>
+        )}
       </div>
 
       <div className="flex-1 bg-white rounded-xl shadow-lg border border-blue-100 flex flex-col overflow-hidden">
@@ -150,13 +220,13 @@ export function Chat({ user }: ChatProps) {
         <div className="p-4 bg-gradient-to-r from-blue-600 to-blue-700 text-white flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center">
-              <Bot className="w-6 h-6" />
+              {agentName ? <UserIcon className="w-6 h-6" /> : <Bot className="w-6 h-6" />}
             </div>
             <div>
-              <h3 className="font-semibold">Sri Tel Support</h3>
+              <h3 className="font-semibold">{agentName || 'Sri Tel Support Bot'}</h3>
               <p className="text-xs text-blue-100 flex items-center gap-1">
-                <span className={`w-2 h-2 rounded-full ${agentOnline ? 'bg-green-400' : 'bg-gray-400'}`} />
-                {agentOnline ? 'Online' : 'Offline'}
+                <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-gray-400'}`} />
+                {isConnected ? 'Connected' : 'Connecting...'}
               </p>
             </div>
           </div>
@@ -198,8 +268,8 @@ export function Chat({ user }: ChatProps) {
                     ? 'bg-white border border-green-200 text-blue-900 rounded-tl-sm'
                     : 'bg-white border border-blue-200 text-blue-900 rounded-tl-sm'
                 }`}>
-                  {message.sender === 'agent' && (
-                    <p className="text-xs font-semibold text-green-600 mb-1">Agent Priya</p>
+                  {message.sender === 'agent' && message.senderName && (
+                    <p className="text-xs font-semibold text-green-600 mb-1">{message.senderName}</p>
                   )}
                   <p className="text-sm whitespace-pre-line">{message.text}</p>
                 </div>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, 
   Settings, 
@@ -32,6 +32,29 @@ export function Dashboard({ user: initialUser, onLogout }: DashboardProps) {
   const [user, setUser] = useState<User>(initialUser);
   const [serviceFilter, setServiceFilter] = useState<string | null>(null);
   const [paymentAmount, setPaymentAmount] = useState<number>(0);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState<number>(0);
+
+  // Load unread notification count from localStorage
+  useEffect(() => {
+    const loadUnreadCount = () => {
+      try {
+        const stored = localStorage.getItem(`notifications_${user.id}`);
+        if (stored) {
+          const notifications = JSON.parse(stored);
+          const unread = notifications.filter((n: any) => !n.read).length;
+          setUnreadNotificationCount(unread);
+        }
+      } catch (error) {
+        console.error('Failed to load notification count:', error);
+      }
+    };
+    
+    loadUnreadCount();
+    
+    // Poll for changes every 5 seconds
+    const interval = setInterval(loadUnreadCount, 5000);
+    return () => clearInterval(interval);
+  }, [user.id, activeTab]);
 
   const refreshUserData = async () => {
     try {
@@ -126,6 +149,7 @@ export function Dashboard({ user: initialUser, onLogout }: DashboardProps) {
             {menuItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
+              const showBadge = item.id === 'notifications' && unreadNotificationCount > 0;
               
               return (
                 <button
@@ -135,15 +159,28 @@ export function Dashboard({ user: initialUser, onLogout }: DashboardProps) {
                     setSidebarOpen(false);
                   }}
                   className={`
-                    w-full flex items-center px-4 py-3 rounded-lg mb-2 transition-colors
+                    w-full flex items-center justify-between px-4 py-3 rounded-lg mb-2 transition-colors
                     ${isActive 
                       ? 'bg-blue-600 text-white shadow-lg' 
                       : 'text-blue-700 hover:bg-blue-50'
                     }
                   `}
                 >
-                  <Icon className="w-5 h-5 mr-3" />
-                  <span className="font-medium">{item.label}</span>
+                  <div className="flex items-center">
+                    <Icon className="w-5 h-5 mr-3" />
+                    <span className="font-medium">{item.label}</span>
+                  </div>
+                  {showBadge && (
+                    <span className={`
+                      px-2 py-0.5 rounded-full text-xs font-bold
+                      ${isActive 
+                        ? 'bg-white text-blue-600' 
+                        : 'bg-red-500 text-white'
+                      }
+                    `}>
+                      {unreadNotificationCount > 99 ? '99+' : unreadNotificationCount}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -205,7 +242,15 @@ export function Dashboard({ user: initialUser, onLogout }: DashboardProps) {
               onPaymentSuccess={refreshUserData}
             />
           )}
-          {activeTab === 'notifications' && <Notifications />}
+          {activeTab === 'notifications' && (
+            <Notifications 
+              user={user} 
+              onNavigate={(tab) => {
+                setActiveTab(tab);
+                setSidebarOpen(false);
+              }}
+            />
+          )}
           {activeTab === 'chat' && <Chat user={user} />}
         </div>
       </main>

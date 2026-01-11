@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const notificationBroker = require('./notification-broker');
+const { publishToQueue } = require('./rabbitmq');
 
 const idempotencyStore = new Map();
 const breaker = {
@@ -91,11 +91,13 @@ router.post('/pay', async (req, res) => {
   });
 
   idempotencyStore.set(idempotencyKey, response);
-  notificationBroker.publishEvent({
+  
+  // Publish to RabbitMQ
+  publishToQueue('payment.events', {
     userId: req.user?.id || null,
     event: 'payment.succeeded',
     payload: response.data
-  });
+  }).catch(console.error);
 
   res.status(200).json(response);
 });

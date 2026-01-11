@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const db = require('../database/db');
-const User = require('../models/user');
-const notificationBroker = require('./notification-broker');
+const db = require('./db');
+const User = require('./user');
+const { publishToQueue } = require('./rabbitmq');
 
 const idempotencyStore = new Map();
 const breaker = {
@@ -157,11 +157,12 @@ router.post('/purchase/:userId/:serviceId', async (req, res) => {
               idempotencyKey
             });
             idempotencyStore.set(idempotencyKey, response);
-            notificationBroker.publishEvent({
+            
+            publishToQueue('provisioning.events', {
               userId,
               event: 'service.provisioned',
               payload: response.data
-            });
+            }).catch(console.error);
 
             res.json(response);
           });
@@ -201,11 +202,12 @@ router.post('/purchase/:userId/:serviceId', async (req, res) => {
               idempotencyKey
             });
             idempotencyStore.set(idempotencyKey, response);
-            notificationBroker.publishEvent({
+            
+            publishToQueue('provisioning.events', {
               userId,
               event: 'service.provisioned',
               payload: response.data
-            });
+            }).catch(console.error);
 
             res.json(response);
           });

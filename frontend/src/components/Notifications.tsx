@@ -1,5 +1,14 @@
-import { useState } from 'react';
-import { Bell, Mail, MessageSquare, AlertCircle, CheckCircle, Info, XCircle } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Bell, Mail, MessageSquare, AlertCircle, CheckCircle, Info, XCircle, RefreshCw } from 'lucide-react';
+import type { User } from '../App';
+import { api } from '../api/api';
+
+type RawNotificationEvent = {
+  id: string;
+  event: string;
+  payload: any;
+  createdAt: string;
+};
 
 type Notification = {
   id: string;
@@ -9,74 +18,20 @@ type Notification = {
   message: string;
   timestamp: string;
   read: boolean;
+  actionLink?: 'bills' | 'payments' | 'services' | 'overview';
+  actionLabel?: string;
 };
 
-export function Notifications() {
-  const [notifications, setNotifications] = useState<Notification[]>([
-    {
-      id: '1',
-      type: 'bill',
-      priority: 'high',
-      title: 'New Bill Available',
-      message: 'Your bill for December 2025 is now available. Amount due: LKR 1,250.00. Due date: January 15, 2026.',
-      timestamp: '2026-01-06T10:30:00',
-      read: false
-    },
-    {
-      id: '2',
-      type: 'alert',
-      priority: 'medium',
-      title: 'Data Usage Alert',
-      message: 'You have used 62% of your monthly data allowance (15.5 GB of 25 GB remaining).',
-      timestamp: '2026-01-07T14:20:00',
-      read: false
-    },
-    {
-      id: '3',
-      type: 'payment',
-      priority: 'low',
-      title: 'Payment Received',
-      message: 'Payment of LKR 1,100.00 has been successfully processed for your November 2025 bill.',
-      timestamp: '2025-12-10T09:15:00',
-      read: true
-    },
-    {
-      id: '4',
-      type: 'service',
-      priority: 'medium',
-      title: 'Service Activated',
-      message: 'International Roaming service has been successfully activated on your account.',
-      timestamp: '2025-12-05T16:45:00',
-      read: true
-    },
-    {
-      id: '5',
-      type: 'bill',
-      priority: 'high',
-      title: 'Payment Reminder',
-      message: 'Your bill payment is due in 3 days. Please make the payment to avoid service disconnection.',
-      timestamp: '2026-01-05T08:00:00',
-      read: false
-    },
-    {
-      id: '6',
-      type: 'alert',
-      priority: 'low',
-      title: 'Network Maintenance',
-      message: 'Scheduled network maintenance on January 10, 2026 from 2:00 AM to 4:00 AM. Some services may be temporarily unavailable.',
-      timestamp: '2026-01-04T12:00:00',
-      read: true
-    },
-    {
-      id: '7',
-      type: 'service',
-      priority: 'low',
-      title: 'New Feature Available',
-      message: 'Check out our new 5G data packages! Get faster speeds and better coverage.',
-      timestamp: '2026-01-03T11:30:00',
-      read: true
-    }
-  ]);
+type NotificationsProps = {
+  user: User;
+  onNavigate?: (tab: 'bills' | 'payments' | 'services' | 'overview') => void;
+};
+
+export function Notifications({ user, onNavigate }: NotificationsProps) {
+  const [notifications, setNotifications] = useState<Notification[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastPoll, setLastPoll] = useState<Date | null>(null);
 
   const [filter, setFilter] = useState<'all' | 'unread' | 'bill' | 'service' | 'payment' | 'alert'>('all');
   const [notificationPreferences, setNotificationPreferences] = useState({
@@ -88,18 +43,180 @@ export function Notifications() {
     promotions: false
   });
 
+  // Parse raw notification event into UI notification
+  const parseNotificationEvent = (rawEvent: RawNotificationEvent): Notification => {
+    const payload = rawEvent.payload || {};
+    let type: Notification['type'] = 'alert';
+    let priority: Notification['priority'] = 'medium';
+    let title = 'Notification';
+    let message = payload.message || 'You have a new notification';
+    let actionLink: Notification['actionLink'] | undefined;
+    let actionLabel: string | undefined;
+
+    // Parse based on event type
+    if (rawEvent.event === 'payment.completed' || rawEvent.event === 'payment.events' || rawEvent.event.includes('payment')) {
+      type = 'payment';
+      priority = 'low';
+      title = 'Payment Successful';
+      message = `Payment of LKR ${payload.amount || '0.00'} has been processed successfully.`;
+      if (payload.billId) {
+        message += ` Bill ID: ${payload.billId}.`;
+      }
+      actionLink = 'bills';
+      actionLabel = 'View Bills';
+    } else if (rawEvent.event === 'service.activated' || rawEvent.event === 'provisioning.events' || rawEvent.event.includes('service')) {
+      type = 'service';
+      priority = 'medium';
+      title = 'Service Update';
+      if (payload.action === 'activated' || payload.status === 'active') {
+        message = `Service "${payload.serviceName || 'service'}" has been activated on your account.`;
+        actionLink = 'services';
+        actionLabel = 'Manage Services';
+      } else if (payload.action === 'deactivated') {
+        message = `Service "${payload.serviceName || 'service'}" has been deactivated.`;
+        actionLink = 'services';
+        actionLabel = 'Manage Services';
+      } else if (payload.action === 'disconnected') {
+        type = 'alert';
+        priority = 'high';
+        title = 'Service Disconnected';
+        message = `Service "${payload.serviceName || 'service'}" has been disconnected due to ${payload.reason || 'overdue payment'}.`;
+        actionLink = 'payments';
+        actionLabel = 'Make Payment';
+      } else {
+        message = payload.message || 'Your service status has been updated.';
+        actionLink = 'services';
+        actionLabel = 'View Services';
+      }
+    } else if (rawEvent.event.includes('bill')) {
+      type = 'bill';
+      priority = 'high';
+      title = 'Bill Notification';
+      if (payload.type === 'generated') {
+        message = `Your bill for ${payload.period || 'this month'} is now available. Amount: LKR ${payload.amount || '0.00'}.`;
+      } else if (payload.type === 'overdue') {
+        priority = 'high';
+        title = 'Overdue Bill Payment';
+        message = `Your bill payment of LKR ${payload.amount || '0.00'} is overdue. Please pay to avoid service disconnection.`;
+        actionLink = 'payments';
+        actionLabel = 'Pay Now';
+      } else if (payload.type === 'reminder') {
+        message = `Payment reminder: Your bill of LKR ${payload.amount || '0.00'} is due in ${payload.daysLeft || '3'} days.`;
+        actionLink = 'payments';
+        actionLabel = 'Pay Bill';
+      } else {
+        message = payload.message || 'You have a new bill available.';
+      }
+      if (!actionLink) {
+        actionLink = 'bills';
+        actionLabel = 'View Bills';
+      }
+    }
+
+    return {
+      id: rawEvent.id,
+      type,
+      priority,
+      title,
+      message,
+      timestamp: rawEvent.createdAt,
+      read: false,
+      actionLink,
+      actionLabel
+    };
+  };
+
+  // Fetch notifications from backend
+  const fetchNotifications = async (showRefreshing = false) => {
+    try {
+      if (showRefreshing) setIsRefreshing(true);
+      const response = await api.pollNotifications(user.id, false); // Don't drain, just peek
+      if (response.data.success && response.data.data.events) {
+        const rawEvents: RawNotificationEvent[] = response.data.data.events;
+        
+        // Parse raw events into UI notifications
+        const parsedNotifications = rawEvents.map(parseNotificationEvent);
+        
+        // Merge with existing notifications from localStorage
+        const storedNotifications = getStoredNotifications();
+        const allNotificationIds = new Set(storedNotifications.map(n => n.id));
+        
+        // Add only new notifications
+        const newNotifications = parsedNotifications.filter(n => !allNotificationIds.has(n.id));
+        const merged = [...newNotifications, ...storedNotifications];
+        
+        // Sort by timestamp (newest first)
+        merged.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+        
+        setNotifications(merged);
+        saveNotifications(merged);
+      }
+      setLastPoll(new Date());
+    } catch (error) {
+      console.error('Failed to fetch notifications:', error);
+    } finally {
+      setIsLoading(false);
+      if (showRefreshing) setIsRefreshing(false);
+    }
+  };
+
+  // Load notifications from localStorage
+  const getStoredNotifications = (): Notification[] => {
+    try {
+      const stored = localStorage.getItem(`notifications_${user.id}`);
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  };
+
+  // Save notifications to localStorage
+  const saveNotifications = (notifs: Notification[]) => {
+    try {
+      localStorage.setItem(`notifications_${user.id}`, JSON.stringify(notifs));
+    } catch (error) {
+      console.error('Failed to save notifications:', error);
+    }
+  };
+
+  // Initial load
+  useEffect(() => {
+    const stored = getStoredNotifications();
+    setNotifications(stored);
+    fetchNotifications();
+  }, [user.id]);
+
+  // Auto-poll every 15 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchNotifications();
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, [user.id]);
+
+  const handleRefresh = () => {
+    fetchNotifications(true);
+  };
+
   const markAsRead = (id: string) => {
-    setNotifications(notifications.map(n => 
+    const updated = notifications.map(n => 
       n.id === id ? { ...n, read: true } : n
-    ));
+    );
+    setNotifications(updated);
+    saveNotifications(updated);
   };
 
   const markAllAsRead = () => {
-    setNotifications(notifications.map(n => ({ ...n, read: true })));
+    const updated = notifications.map(n => ({ ...n, read: true }));
+    setNotifications(updated);
+    saveNotifications(updated);
   };
 
   const deleteNotification = (id: string) => {
-    setNotifications(notifications.filter(n => n.id !== id));
+    const updated = notifications.filter(n => n.id !== id);
+    setNotifications(updated);
+    saveNotifications(updated);
   };
 
   const getFilteredNotifications = () => {
@@ -127,11 +244,26 @@ export function Notifications() {
 
   return (
     <div>
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold text-blue-900 mb-2">Notifications</h1>
-        <p className="text-blue-600">
-          Stay updated with your account activity {unreadCount > 0 && `(${unreadCount} unread)`}
-        </p>
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-blue-900 mb-2">Notifications</h1>
+          <p className="text-blue-600">
+            Stay updated with your account activity {unreadCount > 0 && `(${unreadCount} unread)`}
+          </p>
+          {lastPoll && (
+            <p className="text-xs text-blue-400 mt-1">
+              Last updated: {lastPoll.toLocaleTimeString()}
+            </p>
+          )}
+        </div>
+        <button
+          onClick={handleRefresh}
+          disabled={isRefreshing}
+          className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-300 text-white rounded-lg font-medium transition-colors"
+        >
+          <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+          Refresh
+        </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -179,10 +311,16 @@ export function Notifications() {
 
           {/* Notifications */}
           <div className="space-y-3">
-            {filteredNotifications.length === 0 ? (
+            {isLoading ? (
+              <div className="bg-white rounded-xl shadow-lg border border-blue-100 p-12 text-center">
+                <RefreshCw className="w-12 h-12 text-blue-400 mx-auto mb-3 animate-spin" />
+                <p className="text-blue-600">Loading notifications...</p>
+              </div>
+            ) : filteredNotifications.length === 0 ? (
               <div className="bg-white rounded-xl shadow-lg border border-blue-100 p-12 text-center">
                 <Bell className="w-12 h-12 text-blue-300 mx-auto mb-3" />
                 <p className="text-blue-600">No notifications found</p>
+                <p className="text-sm text-blue-400 mt-2">New notifications will appear here</p>
               </div>
             ) : (
               filteredNotifications.map(notification => (
@@ -192,7 +330,13 @@ export function Notifications() {
                     notification.read 
                       ? 'border-blue-100 opacity-75' 
                       : getPriorityColor(notification.priority)
-                  }`}
+                  } ${notification.actionLink ? 'cursor-pointer hover:shadow-xl hover:border-blue-300' : ''}`}
+                  onClick={() => {
+                    if (notification.actionLink && onNavigate) {
+                      markAsRead(notification.id);
+                      onNavigate(notification.actionLink);
+                    }
+                  }}
                 >
                   <div className="flex items-start gap-4">
                     <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
@@ -218,25 +362,47 @@ export function Notifications() {
                         {notification.message}
                       </p>
                       <div className="flex items-center justify-between">
-                        <p className="text-xs text-blue-500">
-                          {new Date(notification.timestamp).toLocaleString('en-US', {
-                            month: 'short',
-                            day: 'numeric',
-                            hour: 'numeric',
-                            minute: '2-digit'
-                          })}
-                        </p>
+                        <div className="flex items-center gap-3">
+                          <p className="text-xs text-blue-500">
+                            {new Date(notification.timestamp).toLocaleString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: 'numeric',
+                              minute: '2-digit'
+                            })}
+                          </p>
+                          {notification.actionLabel && onNavigate && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (notification.actionLink) {
+                                  markAsRead(notification.id);
+                                  onNavigate(notification.actionLink);
+                                }
+                              }}
+                              className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded-full font-medium transition-colors"
+                            >
+                              {notification.actionLabel}
+                            </button>
+                          )}
+                        </div>
                         <div className="flex gap-2">
                           {!notification.read && (
                             <button
-                              onClick={() => markAsRead(notification.id)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                markAsRead(notification.id);
+                              }}
                               className="text-xs text-blue-600 hover:text-blue-800 font-medium"
                             >
                               Mark as read
                             </button>
                           )}
                           <button
-                            onClick={() => deleteNotification(notification.id)}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteNotification(notification.id);
+                            }}
                             className="text-xs text-red-600 hover:text-red-800 font-medium"
                           >
                             Delete

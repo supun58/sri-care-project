@@ -1,0 +1,29 @@
+{
+  "name": "sri-care-dev-gateway",
+  "listen": 8080,
+  "description": "Local reverse proxy map for dev",
+  "routes": [
+    { "id": "auth", "path": "/api/auth", "target": "http://localhost:5001/api/auth", "rateLimit": "default" },
+    { "id": "billing", "path": "/api/billing", "target": "http://localhost:5001/api/billing", "rateLimit": "default" },
+    { "id": "payment", "path": "/api/payment", "target": "http://localhost:5001/api/payment", "rateLimit": "strict" },
+    { "id": "services", "path": "/api/services", "target": "http://localhost:5001/api/services", "rateLimit": "default" },
+    { "id": "notifications", "path": "/api/notifications", "target": "http://localhost:5001/api/notifications", "rateLimit": "default" }
+  ],
+  "rateLimits": {
+    "default": { "windowMs": 60000, "max": 120 },
+    "strict": { "windowMs": 60000, "max": 30 }
+  },
+  "cors": {
+    "allowOrigins": ["http://localhost:5173", "http://localhost:3000"],
+    "allowMethods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "allowHeaders": ["Authorization", "Content-Type", "Idempotency-Key"],
+    "credentials": true
+  },
+  "serviceMesh": {
+    "retries": 1,
+    "connectTimeoutMs": 2000,
+    "idleTimeoutMs": 10000,
+    "retryOn": ["5xx", "gateway-error"],
+    "circuitBreaker": { "maxFailures": 3, "coolOffMs": 15000 }
+  }
+}

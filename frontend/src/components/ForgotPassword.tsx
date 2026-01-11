@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Smartphone, Lock, ArrowLeft, CheckCircle2 } from 'lucide-react';
+import { api } from '../api/api';
 
 type ForgotPasswordProps = {
   onBackToLogin: () => void;
@@ -12,8 +13,10 @@ export function ForgotPassword({ onBackToLogin }: ForgotPasswordProps) {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [serverOtp, setServerOtp] = useState<string | null>(null);
 
-  const handleSendOTP = (e: React.FormEvent) => {
+  const handleSendOTP = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     
@@ -21,22 +24,35 @@ export function ForgotPassword({ onBackToLogin }: ForgotPasswordProps) {
       setError('Please enter a valid 10-digit mobile number');
       return;
     }
-    
-    setStep('otp');
+
+    try {
+      setLoading(true);
+      const response = await api.forgotPassword(mobile);
+      if (response.data.success) {
+        setServerOtp(response.data.otp || null);
+        setStep('otp');
+      } else {
+        setError(response.data.message || 'Could not send OTP');
+      }
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Could not send OTP');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleVerifyOTP = (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     
-    if (otp === '123456' || otp.length === 6) {
+    if (otp.length === 6) {
       setStep('reset');
     } else {
       setError('Invalid OTP');
     }
   };
 
-  const handleResetPassword = (e: React.FormEvent) => {
+  const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     
@@ -49,8 +65,20 @@ export function ForgotPassword({ onBackToLogin }: ForgotPasswordProps) {
       setError('Passwords do not match');
       return;
     }
-    
-    setStep('success');
+
+    try {
+      setLoading(true);
+      const response = await api.resetPassword(mobile, otp, newPassword);
+      if (response.data.success) {
+        setStep('success');
+      } else {
+        setError(response.data.message || 'Could not reset password');
+      }
+    } catch (err: any) {
+      setError(err.response?.data?.message || 'Could not reset password');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -106,9 +134,10 @@ export function ForgotPassword({ onBackToLogin }: ForgotPasswordProps) {
 
               <button
                 type="submit"
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-colors shadow-lg hover:shadow-xl"
+                disabled={loading}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-colors shadow-lg hover:shadow-xl disabled:opacity-50"
               >
-                Send OTP
+                {loading ? 'Sending...' : 'Send OTP'}
               </button>
             </form>
           )}
@@ -121,7 +150,9 @@ export function ForgotPassword({ onBackToLogin }: ForgotPasswordProps) {
                 <CheckCircle2 className="w-5 h-5 text-green-600 mr-2 flex-shrink-0 mt-0.5" />
                 <div className="text-sm text-green-800">
                   OTP sent to {mobile}
-                  <p className="text-xs mt-1 text-green-600">For demo: use 123456</p>
+                  {serverOtp && (
+                    <p className="text-xs mt-1 text-green-600">Demo OTP: {serverOtp}</p>
+                  )}
                 </div>
               </div>
 
@@ -147,9 +178,10 @@ export function ForgotPassword({ onBackToLogin }: ForgotPasswordProps) {
 
               <button
                 type="submit"
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-colors shadow-lg hover:shadow-xl"
+                disabled={loading}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-colors shadow-lg hover:shadow-xl disabled:opacity-50"
               >
-                Verify OTP
+                {loading ? 'Checking...' : 'Verify OTP'}
               </button>
 
               <button
@@ -215,9 +247,10 @@ export function ForgotPassword({ onBackToLogin }: ForgotPasswordProps) {
 
               <button
                 type="submit"
-                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-colors shadow-lg hover:shadow-xl"
+                disabled={loading}
+                className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-lg transition-colors shadow-lg hover:shadow-xl disabled:opacity-50"
               >
-                Reset Password
+                {loading ? 'Updating...' : 'Reset Password'}
               </button>
             </form>
           )}

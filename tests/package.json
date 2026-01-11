@@ -1,0 +1,10 @@
+{
+  "name": "sri-care-contract-tests",
+  "version": "1.0.0",
+  "scripts": {
+    "test": "node contract-tests.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.0"
+  }
+}

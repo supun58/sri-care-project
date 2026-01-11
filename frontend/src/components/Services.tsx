@@ -37,6 +37,7 @@ export function Services({ user, onRefreshUser, initialFilter }: ServicesProps) 
   const [actionType, setActionType] = useState<'activate' | 'deactivate'>('activate');
   const [actionLoading, setActionLoading] = useState(false);
   const [actionError, setActionError] = useState('');
+  const [actionStatus, setActionStatus] = useState<{ state: 'idle' | 'pending' | 'success' | 'retry' | 'error'; message: string; key?: string }>({ state: 'idle', message: '' });
 
   // Set initial filter if provided
   useEffect(() => {
@@ -107,6 +108,7 @@ export function Services({ user, onRefreshUser, initialFilter }: ServicesProps) 
     setActionType(isServiceActive(service.id) ? 'deactivate' : 'activate');
     setShowModal(true);
     setActionError('');
+    setActionStatus({ state: 'idle', message: '' });
   };
 
   const confirmAction = async () => {
@@ -114,16 +116,21 @@ export function Services({ user, onRefreshUser, initialFilter }: ServicesProps) 
 
     setActionLoading(true);
     setActionError('');
+    const idemKey = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : 'idem-' + Math.random().toString(16).slice(2) + Date.now();
+    setActionStatus({ state: 'pending', message: 'Submitting provisioning request...', key: idemKey });
 
     try {
       let response;
       if (actionType === 'activate') {
-        response = await api.purchaseService(user.id, selectedService.id);
+        response = await api.purchaseService(user.id, selectedService.id, {}, idemKey);
       } else {
         response = await api.deactivateService(user.id, selectedService.id);
       }
 
       if (response.data.success) {
+        const replay = Boolean(response.data.idempotent);
+        const message = replay ? 'Request already applied (idempotent replay)' : 'Request applied successfully';
+        setActionStatus({ state: 'success', message, key: idemKey });
         // Refresh user services
         const userRes = await api.getUserServices(user.id);
         if (userRes.data.success) {
@@ -138,9 +145,12 @@ export function Services({ user, onRefreshUser, initialFilter }: ServicesProps) 
         setShowModal(false);
         setSelectedService(null);
       } else {
+        const retry = response.data.code === 'provisioning_unavailable' || response.data.code === 'provisioning_circuit_open';
+        setActionStatus({ state: retry ? 'retry' : 'error', message: response.data.message || 'Action failed', key: idemKey });
         setActionError(response.data.message || 'Action failed');
       }
     } catch (error: any) {
+      setActionStatus({ state: 'error', message: error.response?.data?.message || 'An error occurred', key: idemKey });
       setActionError(error.response?.data?.message || 'An error occurred');
       console.error('Error:', error);
     } finally {
@@ -295,6 +305,27 @@ export function Services({ user, onRefreshUser, initialFilter }: ServicesProps) 
             {actionError && (
               <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg">
                 {actionError}
+              </div>
+            )}
+            {actionStatus.state !== 'idle' && (
+              <div className={`mb-4 p-3 rounded-lg border text-sm ${
+                actionStatus.state === 'success'
+                  ? 'bg-green-50 border-green-200 text-green-800'
+                  : actionStatus.state === 'pending'
+                  ? 'bg-blue-50 border-blue-200 text-blue-800'
+                  : actionStatus.state === 'retry'
+                  ? 'bg-yellow-50 border-yellow-200 text-yellow-800'
+                  : 'bg-red-50 border-red-200 text-red-800'
+              }`}>
+                <div className="flex items-center justify-between">
+                  <span className="font-semibold">{actionStatus.message}</span>
+                  {actionStatus.key && (
+                    <span className="text-[11px] font-mono text-blue-700">{actionStatus.key}</span>
+                  )}
+                </div>
+                {actionStatus.state === 'retry' && (
+                  <p className="mt-2">Provisioning temporarily unavailable. Retry with the same key to avoid duplicate activation.</p>
+                )}
               </div>
             )}
             <div className="flex gap-3">

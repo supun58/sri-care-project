@@ -1,0 +1,704 @@
+openapi: 3.0.3
+info:
+  title: Sri-Care Telecom Self-Service API
+  version: 1.0.0
+  description: |
+    Hybrid SOA + Microservices API for telecom self-care portal and mobile apps.
+    Provides authentication, billing, service provisioning, payments, and notifications.
+  contact:
+    name: Sri-Care Engineering
+servers:
+  - url: http://localhost:5001/api
+    description: Local development
+  - url: http://localhost:8080/api
+    description: Local via Kong gateway
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        code:
+          type: string
+        message:
+          type: string
+        data:
+          type: object
+      required:
+        - success
+        - message
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        code:
+          type: string
+        message:
+          type: string
+        data:
+          type: object
+      required:
+        - success
+        - message
+
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        phone:
+          type: string
+        email:
+          type: string
+          nullable: true
+        name:
+          type: string
+          nullable: true
+        accountType:
+          type: string
+          enum: [prepaid, postpaid]
+        accountBalance:
+          type: number
+        currentBill:
+          type: number
+        dataRemaining:
+          type: number
+        minutesRemaining:
+          type: number
+
+    Service:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        description:
+          type: string
+        price:
+          type: number
+        is_active:
+          type: integer
+        category:
+          type: string
+          enum: [data, voice, vas]
+
+    Bill:
+      type: object
+      properties:
+        id:
+          type: integer
+        userId:
+          type: integer
+        amount:
+          type: number
+        date:
+          type: string
+          format: date
+        status:
+          type: string
+          enum: [paid, pending]
+
+    PaymentRequest:
+      type: object
+      required:
+        - amount
+        - cardNumber
+      properties:
+        amount:
+          type: number
+        cardNumber:
+          type: string
+        billId:
+          type: integer
+          nullable: true
+
+    NotificationEvent:
+      type: object
+      properties:
+        id:
+          type: string
+        event:
+          type: string
+        payload:
+          type: object
+        createdAt:
+          type: string
+          format: date-time
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: Unique key to ensure idempotent processing
+
+paths:
+  # ========================
+  # Auth Service
+  # ========================
+  /auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: User login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - phone
+                - password
+              properties:
+                phone:
+                  type: string
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      token:
+                        type: string
+                      user:
+                        $ref: '#/components/schemas/User'
+        '401':
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/register:
+    post:
+      tags:
+        - Authentication
+      summary: Register new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - phone
+                - password
+              properties:
+                phone:
+                  type: string
+                password:
+                  type: string
+                email:
+                  type: string
+                name:
+                  type: string
+      responses:
+        '200':
+          description: Registration successful
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      token:
+                        type: string
+                      user:
+                        $ref: '#/components/schemas/User'
+
+  /auth/exists/{phone}:
+    get:
+      tags:
+        - Authentication
+      summary: Check if user exists
+      parameters:
+        - name: phone
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: User existence check
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  exists:
+                    type: boolean
+
+  /auth/forgot:
+    post:
+      tags:
+        - Authentication
+      summary: Request password reset OTP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - phone
+              properties:
+                phone:
+                  type: string
+      responses:
+        '200':
+          description: OTP sent (demo returns OTP in response)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      otp:
+                        type: string
+
+  /auth/reset:
+    post:
+      tags:
+        - Authentication
+      summary: Reset password with OTP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - phone
+                - otp
+                - newPassword
+              properties:
+                phone:
+                  type: string
+                otp:
+                  type: string
+                newPassword:
+                  type: string
+      responses:
+        '200':
+          description: Password reset successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  /auth/profile/{userId}:
+    get:
+      tags:
+        - Authentication
+      summary: Get user profile
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: User profile
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      user:
+                        $ref: '#/components/schemas/User'
+
+  /auth/update/{userId}:
+    put:
+      tags:
+        - Authentication
+      summary: Update user account values
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                accountBalance:
+                  type: number
+                dataRemaining:
+                  type: number
+                minutesRemaining:
+                  type: number
+      responses:
+        '200':
+          description: Account updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  # ========================
+  # Billing Service
+  # ========================
+  /billing/{userId}:
+    get:
+      tags:
+        - Billing
+      summary: Get user bills
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Bills list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  bills:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Bill'
+
+  /billing/details/{billId}:
+    get:
+      tags:
+        - Billing
+      summary: Get bill details
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: billId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Bill details
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  bill:
+                    $ref: '#/components/schemas/Bill'
+
+  # ========================
+  # Payment Gateway
+  # ========================
+  /payment/pay:
+    post:
+      tags:
+        - Payments
+      summary: Process payment (idempotent)
+      security:
+        - BearerAuth: []
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PaymentRequest'
+      responses:
+        '200':
+          description: Payment processed or replayed (idempotent)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      idempotent:
+                        type: boolean
+                        description: True if this was a replay
+                      data:
+                        type: object
+                        properties:
+                          transactionId:
+                            type: string
+                          amount:
+                            type: number
+                          maskedCard:
+                            type: string
+                          status:
+                            type: string
+                          idempotencyKey:
+                            type: string
+        '400':
+          description: Missing idempotency key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Payment processor unavailable (circuit open or downstream failure)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  # ========================
+  # Service Provisioning
+  # ========================
+  /services:
+    get:
+      tags:
+        - Services
+      summary: List all available services
+      security:
+        - BearerAuth: []
+      responses:
+        '200':
+          description: Services list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      services:
+                        type: array
+                        items:
+                          $ref: '#/components/schemas/Service'
+
+  /services/user/{userId}:
+    get:
+      tags:
+        - Services
+      summary: Get user's active services
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: User services
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      services:
+                        type: array
+                        items:
+                          type: object
+
+  /services/purchase/{userId}/{serviceId}:
+    post:
+      tags:
+        - Services
+      summary: Activate service (idempotent)
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        '200':
+          description: Service activated or replayed
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      idempotent:
+                        type: boolean
+                      data:
+                        type: object
+                        properties:
+                          activationId:
+                            type: string
+                          serviceId:
+                            type: integer
+                          userId:
+                            type: integer
+                          idempotencyKey:
+                            type: string
+        '400':
+          description: Missing idempotency key
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Provisioning unavailable (circuit open or downstream failure)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /services/deactivate/{userId}/{serviceId}:
+    post:
+      tags:
+        - Services
+      summary: Deactivate service
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: integer
+        - name: serviceId
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Service deactivated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+
+  # ========================
+  # Notification Broker
+  # ========================
+  /notifications/publish:
+    post:
+      tags:
+        - Notifications
+      summary: Publish event (internal or admin)
+      security:
+        - BearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - userId
+                - event
+              properties:
+                userId:
+                  type: string
+                event:
+                  type: string
+                payload:
+                  type: object
+      responses:
+        '200':
+          description: Event accepted
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          size:
+                            type: integer
+
+  /notifications/poll/{userId}:
+    get:
+      tags:
+        - Notifications
+      summary: Poll for user notifications
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: drain
+          in: query
+          schema:
+            type: boolean
+            default: true
+          description: Whether to clear queue after poll
+      responses:
+        '200':
+          description: Notifications list
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessResponse'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          events:
+                            type: array
+                            items:
+                              $ref: '#/components/schemas/NotificationEvent'

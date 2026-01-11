@@ -2,9 +2,10 @@ const sqlite3 = require('sqlite3').verbose();
 const path = require('path');
 const bcrypt = require('bcryptjs');
 
-// Create database connection
+// Create database connection - use environment variable
+const DB_PATH = process.env.DATABASE_URL || path.join(__dirname, 'auth.db');
 const db = new sqlite3.Database(
-  path.join(__dirname, 'sricare.db'),
+  DB_PATH,
   sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE,
   (err) => {
     if (err) {

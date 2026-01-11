@@ -32,6 +32,7 @@ export function Payments({ user, initialAmount = 0, onPaymentSuccess }: Payments
   const [cvv, setCvv] = useState('');
   const [showSuccess, setShowSuccess] = useState(false);
   const [processing, setProcessing] = useState(false);
+  const [statusBanner, setStatusBanner] = useState<{ state: 'idle' | 'pending' | 'success' | 'retry' | 'error'; message: string; key?: string }>({ state: 'idle', message: '' });
 
   // Payment history - different for prepaid and postpaid
   const [paymentHistory, setPaymentHistory] = useState<PaymentHistory[]>([]);
@@ -82,6 +83,11 @@ export function Payments({ user, initialAmount = 0, onPaymentSuccess }: Payments
     }
   }, [isPrepaid, user.id]);
 
+  const generateIdempotencyKey = () => {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+    return 'idem-' + Math.random().toString(16).slice(2) + Date.now();
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const amount = parseFloat(paymentAmount);
@@ -92,35 +98,47 @@ export function Payments({ user, initialAmount = 0, onPaymentSuccess }: Payments
     }
     
     setProcessing(true);
+        const idemKey = generateIdempotencyKey();
+        setStatusBanner({ state: 'pending', message: 'Submitting secure payment...', key: idemKey });
 
     try {
-      // Update backend balance/bill
-      if (isPrepaid) {
-        // Add to account balance
-        const newBalance = user.accountBalance + amount;
-        await api.updateUserAccount(user.id, { accountBalance: newBalance });
-        
-        // Save to localStorage
-        const topup = {
-          id: `TOP${Date.now()}`,
-          date: new Date().toISOString(),
-          amount: amount,
-          method: `Card ****${cardNumber.slice(-4)}`,
-          reference: `TOP-${Date.now()}`
-        };
-        
-        const stored = localStorage.getItem(`topups_${user.id}`);
-        const history = stored ? JSON.parse(stored) : [];
-        history.unshift(topup);
-        localStorage.setItem(`topups_${user.id}`, JSON.stringify(history));
-        setPaymentHistory(history.map((t: any) => ({
-          ...t,
-          status: 'success' as const
-        })));
-      } else {
-        // Reset current bill for postpaid
-        await api.updateUserAccount(user.id, { accountBalance: 0 });
-      }
+          const paymentResponse = await api.makePayment({ billId: 0, amount, cardNumber }, idemKey);
+          const payload = paymentResponse.data;
+          const replay = Boolean(payload.idempotent);
+
+          if (!payload.success) {
+            const retry = payload.code === 'payment_downstream_unavailable' || payload.code === 'payment_circuit_open';
+            setStatusBanner({ state: retry ? 'retry' : 'error', message: payload.message || 'Payment failed', key: idemKey });
+            setProcessing(false);
+            return;
+          }
+
+          if (!replay) {
+            if (isPrepaid) {
+              const newBalance = user.accountBalance + amount;
+              await api.updateUserAccount(user.id, { accountBalance: newBalance });
+              const topup = {
+                id: `TOP${Date.now()}`,
+                date: new Date().toISOString(),
+                amount: amount,
+                method: payload.data?.maskedCard || `Card ****${cardNumber.slice(-4)}`,
+                reference: payload.data?.transactionId || `TOP-${Date.now()}`
+              };
+              const stored = localStorage.getItem(`topups_${user.id}`);
+              const history = stored ? JSON.parse(stored) : [];
+              history.unshift(topup);
+              localStorage.setItem(`topups_${user.id}`, JSON.stringify(history));
+              setPaymentHistory(history.map((t: any) => ({ ...t, status: 'success' as const })));
+            } else {
+              await api.updateUserAccount(user.id, { accountBalance: 0 });
+            }
+          }
+
+          const statusMessage = replay
+            ? 'Payment already processed (idempotent replay)'
+            : 'Payment processed successfully';
+
+          setStatusBanner({ state: replay ? 'success' : 'success', message: statusMessage, key: idemKey });
       
       // Refresh user data in parent
       if (onPaymentSuccess) {
@@ -144,6 +162,7 @@ export function Payments({ user, initialAmount = 0, onPaymentSuccess }: Payments
     } catch (error) {
       console.error('Payment error:', error);
       setProcessing(false);
+      setStatusBanner({ state: 'error', message: 'Payment failed. Please try again.', key: idemKey });
       alert('Payment failed. Please try again.');
     }
   };
@@ -200,6 +219,28 @@ export function Payments({ user, initialAmount = 0, onPaymentSuccess }: Payments
                   }
                 </p>
               </div>
+            </div>
+          )}
+
+          {statusBanner.state !== 'idle' && (
+            <div className={`mb-4 p-4 rounded-lg border ${
+              statusBanner.state === 'success'
+                ? 'bg-green-50 border-green-200 text-green-800'
+                : statusBanner.state === 'pending'
+                ? 'bg-blue-50 border-blue-200 text-blue-800'
+                : statusBanner.state === 'retry'
+                ? 'bg-yellow-50 border-yellow-200 text-yellow-800'
+                : 'bg-red-50 border-red-200 text-red-800'
+            }`}>
+              <div className="flex items-center justify-between">
+                <span className="font-semibold">{statusBanner.message}</span>
+                {statusBanner.key && (
+                  <span className="text-xs font-mono text-blue-700">{statusBanner.key}</span>
+                )}
+              </div>
+              {statusBanner.state === 'retry' && (
+                <p className="text-sm mt-2">We kept your request. Retry after a moment to avoid double charging.</p>
+              )}
             </div>
           )}
 

@@ -19,72 +19,74 @@ const db = new sqlite3.Database(
 
 // Initialize tables
 function initializeTables() {
-  // Users table
-  db.run(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      phone TEXT UNIQUE NOT NULL,
-      email TEXT,
-      name TEXT,
-      password_hash TEXT NOT NULL,
-      account_number TEXT UNIQUE,
-      account_type TEXT DEFAULT 'prepaid',
-      account_balance DECIMAL(10,2) DEFAULT 0,
-      current_bill DECIMAL(10,2) DEFAULT 0,
-      data_remaining DECIMAL(10,2) DEFAULT 0,
-      minutes_remaining INTEGER DEFAULT 0,
-      reset_token TEXT,
-      reset_expires DATETIME,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+  db.serialize(() => {
+    // Users table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        phone TEXT UNIQUE NOT NULL,
+        email TEXT,
+        name TEXT,
+        password_hash TEXT NOT NULL,
+        account_number TEXT UNIQUE,
+        account_type TEXT DEFAULT 'prepaid',
+        account_balance DECIMAL(10,2) DEFAULT 0,
+        current_bill DECIMAL(10,2) DEFAULT 0,
+        data_remaining DECIMAL(10,2) DEFAULT 0,
+        minutes_remaining INTEGER DEFAULT 0,
+        reset_token TEXT,
+        reset_expires DATETIME,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
 
-  // Bills table
-  db.run(`
-    CREATE TABLE IF NOT EXISTS bills (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      amount DECIMAL(10,2) NOT NULL,
-      due_date DATE NOT NULL,
-      status TEXT DEFAULT 'pending',
-      generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      paid_at DATETIME,
-      FOREIGN KEY (user_id) REFERENCES users(id)
-    )
-  `);
+    // Bills table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS bills (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        amount DECIMAL(10,2) NOT NULL,
+        due_date DATE NOT NULL,
+        status TEXT DEFAULT 'pending',
+        generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        paid_at DATETIME,
+        FOREIGN KEY (user_id) REFERENCES users(id)
+      )
+    `);
 
-  // Services table
-  db.run(`
-    CREATE TABLE IF NOT EXISTS services (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      name TEXT NOT NULL,
-      description TEXT,
-      price DECIMAL(10,2),
-      is_active BOOLEAN DEFAULT 1
-    )
-  `);
+    // Services table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS services (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        description TEXT,
+        price DECIMAL(10,2),
+        is_active BOOLEAN DEFAULT 1
+      )
+    `);
 
-  // User services (subscriptions)
-  db.run(`
-    CREATE TABLE IF NOT EXISTS user_services (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER NOT NULL,
-      service_id INTEGER NOT NULL,
-      status TEXT DEFAULT 'inactive',
-      activated_at DATETIME,
-      deactivated_at DATETIME,
-      FOREIGN KEY (user_id) REFERENCES users(id),
-      FOREIGN KEY (service_id) REFERENCES services(id)
-    )
-  `);
+    // User services (subscriptions)
+    db.run(`
+      CREATE TABLE IF NOT EXISTS user_services (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        service_id INTEGER NOT NULL,
+        status TEXT DEFAULT 'inactive',
+        activated_at DATETIME,
+        deactivated_at DATETIME,
+        FOREIGN KEY (user_id) REFERENCES users(id),
+        FOREIGN KEY (service_id) REFERENCES services(id)
+      )
+    `);
 
-  // Insert default data
-  insertDefaultData();
-  // Migrate any legacy plaintext passwords to bcrypt hashes
-  migratePasswords();
-  // Migrate database schema and add missing columns
-  migrateDatabaseSchema();
+    // Insert default data
+    insertDefaultData();
+    // Migrate any legacy plaintext passwords to bcrypt hashes
+    migratePasswords();
+    // Migrate database schema and add missing columns
+    migrateDatabaseSchema();
+  });
 }
 
 function insertDefaultData() {

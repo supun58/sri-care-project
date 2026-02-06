@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const notificationBroker = require('./notification-broker');
+const { publishToQueue } = require('./rabbitmq');
 
 const idempotencyStore = new Map();
 const breaker = {
@@ -52,7 +52,7 @@ async function simulateBillingCall() {
 }
 
 router.post('/pay', async (req, res) => {
-  const { amount, cardNumber, billId } = req.body;
+  const { amount, cardNumber, billId, userId } = req.body;
   const idempotencyKey = getIdempotencyKey(req);
 
   if (!idempotencyKey) {
@@ -91,11 +91,13 @@ router.post('/pay', async (req, res) => {
   });
 
   idempotencyStore.set(idempotencyKey, response);
-  notificationBroker.publishEvent({
-    userId: req.user?.id || null,
+  
+  // Publish to RabbitMQ
+  publishToQueue('payment.events', {
+    userId: userId || req.user?.id || null,
     event: 'payment.succeeded',
     payload: response.data
-  });
+  }).catch(console.error);
 
   res.status(200).json(response);
 });

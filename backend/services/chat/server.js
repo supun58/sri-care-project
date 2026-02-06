@@ -10,6 +10,7 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 3006;
+const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://auth-service:3001';
 
 app.use(cors());
 app.use(express.json());
@@ -171,17 +172,28 @@ wss.on('connection', (ws, req) => {
               
               // If no agent assigned, try bot response
               if (!session.agent_id) {
-                // Get user data for context (in production, fetch from auth service)
-                const userData = {
-                  currentBill: 1250,
-                  dataRemaining: 15.5,
-                  accountBalance: 500,
-                  accountType: 'postpaid'
+                const fetchUserProfile = async () => {
+                  try {
+                    const res = await fetch(`${AUTH_SERVICE_URL}/profile/${userId}`);
+                    const data = await res.json();
+                    if (data && data.success && data.user) {
+                      return {
+                        currentBill: data.user.currentBill ?? data.user.current_bill ?? 0,
+                        dataRemaining: data.user.dataRemaining ?? data.user.data_remaining ?? 0,
+                        accountBalance: data.user.accountBalance ?? data.user.account_balance ?? 0,
+                        accountType: data.user.accountType ?? data.user.account_type ?? 'prepaid'
+                      };
+                    }
+                  } catch (e) {
+                    console.error('Failed to fetch user profile:', e);
+                  }
+                  return {};
                 };
+
+                fetchUserProfile().then((userData) => {
+                  const botResponse = chatService.generateBotResponse(message.text, userData || {});
                 
-                const botResponse = chatService.generateBotResponse(message.text, userData);
-                
-                if (botResponse === 'agent_escalation') {
+                  if (botResponse === 'agent_escalation') {
                   // Assign agent
                   chatService.assignAgent(sessionId, (err, agent) => {
                     if (err) {
@@ -228,7 +240,7 @@ wss.on('connection', (ws, req) => {
                       });
                     }
                   });
-                } else if (botResponse) {
+                  } else if (botResponse) {
                   // Send bot response
                   setTimeout(() => {
                     chatService.saveMessage(sessionId, 'bot', 'bot', 'Bot', botResponse, 'text', (err, botMsg) => {
@@ -241,7 +253,7 @@ wss.on('connection', (ws, req) => {
                       }
                     });
                   }, 800 + Math.random() * 700);
-                } else {
+                  } else {
                   // No bot response, escalate to agent
                   chatService.assignAgent(sessionId, (err, agent) => {
                     if (!err && agent) {
@@ -257,7 +269,8 @@ wss.on('connection', (ws, req) => {
                       });
                     }
                   });
-                }
+                  }
+                });
               } else {
                 // Agent is assigned, they'll respond (in production via agent dashboard)
                 // For demo, simulate agent response after delay

@@ -177,17 +177,37 @@ function getSession(sessionId, callback) {
 // Bot auto-response logic
 function generateBotResponse(userMessage, userData) {
   const msg = userMessage.toLowerCase();
+  const accountType = userData.accountType || userData.account_type || 'prepaid';
+  const balance = userData.accountBalance ?? userData.account_balance ?? 0;
+  const bill = userData.currentBill ?? userData.current_bill ?? 0;
+  const dataRemaining = userData.dataRemaining ?? userData.data_remaining ?? 0;
+  const minutesRemaining = userData.minutesRemaining ?? userData.minutes_remaining ?? 0;
   
-  if (msg.includes('bill') || msg.includes('payment')) {
-    return `I can see your current bill is LKR ${userData.currentBill || '0.00'} due on ${new Date(Date.now() + 4 * 24 * 60 * 60 * 1000).toLocaleDateString()}. Would you like to make a payment now or need more details?`;
+  if (msg.includes('bill') || msg.includes('payment') || msg.includes('pay')) {
+    return `I can see your current bill is LKR ${bill || '0.00'} due on ${new Date(Date.now() + 4 * 24 * 60 * 60 * 1000).toLocaleDateString()}. Would you like to make a payment now or need more details?`;
   }
   
-  if (msg.includes('data') || msg.includes('internet')) {
-    return `You currently have ${userData.dataRemaining || '0'} GB of data remaining. Would you like to top up or upgrade your data plan?`;
+  if (msg.includes('data') || msg.includes('internet') || msg.includes('usage')) {
+    return `You currently have ${dataRemaining || '0'} GB of data remaining. Would you like to top up or upgrade your data plan?`;
   }
   
   if (msg.includes('balance')) {
-    return `Your account balance is LKR ${userData.accountBalance || '0.00'}. ${userData.accountType === 'prepaid' ? 'Would you like to recharge?' : ''}`;
+    if (accountType === 'prepaid') {
+      return `Your account balance is LKR ${balance || '0.00'}. Would you like to recharge?`;
+    }
+    return `Your current bill is LKR ${bill || '0.00'}. Would you like to make a payment?`;
+  }
+
+  if (msg.includes('minute') || msg.includes('call') || msg.includes('voice')) {
+    return `You currently have ${minutesRemaining || '0'} voice minutes remaining. Want to add a voice plan?`;
+  }
+
+  if (msg.includes('roaming')) {
+    return 'You can activate roaming from the Services tab. Would you like me to guide you there?';
+  }
+
+  if (msg.includes('top up') || msg.includes('recharge')) {
+    return 'You can top up from the Payments tab. Would you like to make a top-up now?';
   }
   
   if (msg.includes('hello') || msg.includes('hi')) {

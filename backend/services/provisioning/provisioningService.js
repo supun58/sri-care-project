@@ -13,6 +13,8 @@ const breaker = {
   coolOffMs: 15000
 };
 
+const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://auth-service:3001';
+
 const success = (code, message, data = {}) => ({ success: true, code, message, data });
 const failure = (code, message, data = {}) => ({ success: false, code, message, data });
 
@@ -160,8 +162,14 @@ router.post('/purchase/:userId/:serviceId', async (req, res) => {
             
             publishToQueue('provisioning.events', {
               userId,
-              event: 'service.provisioned',
-              payload: response.data
+              event: 'service.activated',
+              payload: {
+                ...response.data,
+                serviceId,
+                serviceName: service.name,
+                action: 'activated',
+                status: 'active'
+              }
             }).catch(console.error);
 
             res.json(response);
@@ -231,8 +239,22 @@ router.post('/deactivate/:userId/:serviceId', (req, res) => {
     if (err) {
       return res.status(500).json(failure('service_deactivate_error', 'Error deactivating service'));
     }
-
-    res.json(success('service_deactivated', 'Service deactivated successfully'));
+    // Fetch service name for notification payload
+    db.get('SELECT name FROM services WHERE id = ?', [serviceId], (svcErr, svc) => {
+      if (!svcErr && svc) {
+        publishToQueue('provisioning.events', {
+          userId,
+          event: 'service.deactivated',
+          payload: {
+            serviceId,
+            serviceName: svc.name,
+            action: 'deactivated',
+            status: 'inactive'
+          }
+        }).catch(console.error);
+      }
+      res.json(success('service_deactivated', 'Service deactivated successfully'));
+    });
   });
 });
 
@@ -245,50 +267,77 @@ function updateUserAccountForService(userId, serviceId, servicePrice, callback) 
       return callback(new Error('Service not found'));
     }
 
-    // Get user account type
-    const userSql = `SELECT account_type, account_balance, current_bill, data_remaining, minutes_remaining FROM users WHERE id = ?`;
-    db.get(userSql, [userId], (userErr, user) => {
-      if (userErr || !user) {
-        return callback(new Error('User not found'));
-      }
+    const serviceName = service.name.toLowerCase();
 
-      const serviceName = service.name.toLowerCase();
-      const updates = {};
+    // Fetch user from Auth Service
+    fetch(`${AUTH_SERVICE_URL}/profile/${userId}`)
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data || !data.success || !data.user) {
+          throw new Error('User not found');
+        }
 
-      // Update data remaining if it's a data service
-      if (serviceName.includes('data') || serviceName.includes('5gb') || serviceName.includes('10gb') || serviceName.includes('50gb')) {
-        if (serviceName.includes('5gb')) {
-          updates.dataRemaining = (user.data_remaining || 0) + 5;
-        } else if (serviceName.includes('10gb')) {
-          updates.dataRemaining = (user.data_remaining || 0) + 10;
-        } else if (serviceName.includes('50gb')) {
-          updates.dataRemaining = (user.data_remaining || 0) + 50;
+        const user = data.user;
+        const current = {
+          accountType: user.accountType || user.account_type || 'prepaid',
+          accountBalance: Number(user.accountBalance ?? user.account_balance ?? 0),
+          currentBill: Number(user.currentBill ?? user.current_bill ?? 0),
+          dataRemaining: Number(user.dataRemaining ?? user.data_remaining ?? 0),
+          minutesRemaining: Number(user.minutesRemaining ?? user.minutes_remaining ?? 0)
+        };
+
+        const updates = {};
+
+        // Update data remaining if it's a data service
+        if (serviceName.includes('data') || serviceName.includes('5gb') || serviceName.includes('10gb') || serviceName.includes('50gb')) {
+          if (serviceName.includes('5gb')) {
+            updates.dataRemaining = current.dataRemaining + 5;
+          } else if (serviceName.includes('10gb')) {
+            updates.dataRemaining = current.dataRemaining + 10;
+          } else if (serviceName.includes('50gb')) {
+            updates.dataRemaining = current.dataRemaining + 50;
+          } else {
+            updates.dataRemaining = current.dataRemaining + 5; // default
+          }
+        }
+
+        // Update minutes remaining if it's a voice service
+        if (serviceName.includes('call') || serviceName.includes('voice') || serviceName.includes('minute') ||
+            serviceName.includes('unlimited') || serviceName.includes('roaming')) {
+          updates.minutesRemaining = current.minutesRemaining + 500;
+        }
+
+        // Handle billing based on account type
+        if (current.accountType === 'prepaid') {
+          updates.accountBalance = current.accountBalance - servicePrice;
+          if (updates.accountBalance < 0) {
+            throw new Error('Insufficient account balance');
+          }
         } else {
-          updates.dataRemaining = (user.data_remaining || 0) + 5; // default
+          updates.currentBill = current.currentBill + servicePrice;
         }
-      }
 
-      // Update minutes remaining if it's a voice service
-      if (serviceName.includes('call') || serviceName.includes('voice') || serviceName.includes('minute') || 
-          serviceName.includes('unlimited') || serviceName.includes('roaming')) {
-        updates.minutesRemaining = (user.minutes_remaining || 0) + 500; // Default 500 minutes per voice service
-      }
-
-      // Handle billing based on account type
-      if (user.account_type === 'prepaid') {
-        // Prepaid: Deduct from account balance
-        updates.accountBalance = (user.account_balance || 0) - servicePrice;
-        if (updates.accountBalance < 0) {
-          return callback(new Error('Insufficient account balance'));
+        return fetch(`${AUTH_SERVICE_URL}/update/${userId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            accountBalance: updates.accountBalance,
+            dataRemaining: updates.dataRemaining,
+            minutesRemaining: updates.minutesRemaining,
+            currentBill: updates.currentBill
+          })
+        });
+      })
+      .then((res) => res.json())
+      .then((data) => {
+        if (!data || !data.success) {
+          throw new Error(data?.message || 'Error updating user');
         }
-      } else {
-        // Postpaid: Add to current bill
-        updates.currentBill = (user.current_bill || 0) + servicePrice;
-      }
-
-      // Apply all updates
-      User.updateAccountValues(userId, updates, callback);
-    });
+        callback(null, { success: true });
+      })
+      .catch((error) => {
+        callback(error);
+      });
   });
 }
 

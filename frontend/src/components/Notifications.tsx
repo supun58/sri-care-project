@@ -186,11 +186,11 @@ export function Notifications({ user, onNavigate }: NotificationsProps) {
     fetchNotifications();
   }, [user.id]);
 
-  // Auto-poll every 15 seconds
+  // Auto-poll every 5 seconds
   useEffect(() => {
     const interval = setInterval(() => {
       fetchNotifications();
-    }, 15000);
+    }, 5000);
 
     return () => clearInterval(interval);
   }, [user.id]);

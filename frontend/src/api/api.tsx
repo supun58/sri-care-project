@@ -1,7 +1,9 @@
 // frontend/src/api/api.ts
 import axios from 'axios';
 
-const API_BASE = 'http://localhost:5001/api';
+const API_BASE = (typeof import.meta !== 'undefined' && import.meta.env && import.meta.env.VITE_API_BASE)
+  ? import.meta.env.VITE_API_BASE
+  : 'http://localhost:3100/api';
 
 const createIdempotencyKey = () => {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -64,29 +66,33 @@ export const api = {
     apiClient.get(`/billing/details/${billId}`),
   
   // Payment endpoints
-  makePayment: (data: { billId?: number; amount: number; cardNumber: string }, idempotencyKey?: string) => 
+  makePayment: (data: { billId?: number; amount: number; cardNumber: string; userId?: string | number }, idempotencyKey?: string) => 
     apiClient.post('/payment/pay', data, {
       headers: { 'Idempotency-Key': idempotencyKey || createIdempotencyKey() }
     }),
   
-  // Service endpoints
-  getServices: (userId: number | string) => 
-    apiClient.get(`/services/${userId}`),
+  // Service (provisioning) endpoints
+  getServices: (_userId: number | string) => 
+    apiClient.get('/provisioning'),
   
   getUserServices: (userId: number | string) =>
-    apiClient.get(`/services/user/${userId}`),
+    apiClient.get(`/provisioning/user/${userId}`),
   
   purchaseService: (userId: number | string, serviceId: number | string, data?: any, idempotencyKey?: string) =>
-    apiClient.post(`/services/purchase/${userId}/${serviceId}`, data || {}, {
+    apiClient.post(`/provisioning/purchase/${userId}/${serviceId}`, data || {}, {
       headers: { 'Idempotency-Key': idempotencyKey || createIdempotencyKey() }
     }),
     
   deactivateService: (userId: number | string, serviceId: number | string) =>
-    apiClient.post(`/services/deactivate/${userId}/${serviceId}`),
+    apiClient.post(`/provisioning/deactivate/${userId}/${serviceId}`),
   
   // Notification endpoints
-  sendNotification: (data: { type: string; message: string; userId: string }) => 
-    apiClient.post('/notifications/send', data),
+  sendNotification: (data: { type: string; message: string; userId: string | number }) => 
+    apiClient.post('/notifications/publish', {
+      userId: data.userId,
+      event: data.type,
+      payload: { message: data.message }
+    }),
   
   pollNotifications: (userId: string | number, drain: boolean = true) =>
     apiClient.get(`/notifications/poll/${userId}?drain=${drain}`),

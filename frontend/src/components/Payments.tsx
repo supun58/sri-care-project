@@ -102,7 +102,7 @@ export function Payments({ user, initialAmount = 0, onPaymentSuccess }: Payments
         setStatusBanner({ state: 'pending', message: 'Submitting secure payment...', key: idemKey });
 
     try {
-          const paymentResponse = await api.makePayment({ billId: 0, amount, cardNumber }, idemKey);
+          const paymentResponse = await api.makePayment({ billId: 0, amount, cardNumber, userId: user.id }, idemKey);
           const payload = paymentResponse.data;
           const replay = Boolean(payload.idempotent);
 

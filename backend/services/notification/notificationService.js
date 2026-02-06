@@ -1,7 +1,6 @@
 const express = require('express');
 const router = express.Router();
-
-const queues = new Map();
+const { queues } = require('./notificationConsumer');
 const MAX_QUEUE_SIZE = 100; // Best effort: limit queue size per user to prevent memory overflow
 
 const success = (code, message, data = {}) => ({ success: true, code, message, data });
@@ -13,7 +12,8 @@ router.post('/publish', (req, res) => {
     return res.status(400).json(failure('invalid_event', 'userId and event are required'));
   }
   
-  const queue = queues.get(userId) || [];
+  const key = String(userId);
+  const queue = queues.get(key) || [];
   
   // Best effort delivery: if queue is full, remove oldest notifications
   if (queue.length >= MAX_QUEUE_SIZE) {
@@ -27,17 +27,18 @@ router.post('/publish', (req, res) => {
     payload,
     createdAt: new Date().toISOString()
   });
-  queues.set(userId, queue);
+  queues.set(key, queue);
   
-  res.json(success('event_accepted', 'Event accepted', { size: queues.get(userId)?.length || 0 }));
+  res.json(success('event_accepted', 'Event accepted', { size: queues.get(key)?.length || 0 }));
 });
 
 router.get('/poll/:userId', (req, res) => {
   const { userId } = req.params;
   const drain = req.query.drain !== 'false';
-  const events = queues.get(userId) || [];
+  const key = String(userId);
+  const events = queues.get(key) || [];
   if (drain) {
-    queues.set(userId, []);
+    queues.set(key, []);
   }
   res.json(success('events_ready', 'Events fetched', { events }));
 });
